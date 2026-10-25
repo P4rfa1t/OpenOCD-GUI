@@ -6,21 +6,40 @@
 
 [![Rust](https://img.shields.io/badge/rust-stable-orange)]() [![Tauri](https://img.shields.io/badge/Tauri-2-blue)]() [![License: MIT](https://img.shields.io/badge/license-MIT-green)]() [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 
-> **历史**：v0.1.x 曾以 Python/Tkinter 实现。v0.2.0 起项目切换到 Tauri 2 作为主框架——Python 实现已从仓库移除（git 历史仍可查），本次选型的实测依据保存在 [docs/framework-evaluation.md](docs/framework-evaluation.md)（Tkinter / PySide6 / PyQt6 / Tauri 2 / Wails v2 / Flutter 六框架对比）。
+> **历史**：v0.1.x 曾以 Python/Tkinter 实现。v0.2.0 起项目切换到 Tauri 2 作为主框架——Python 实现已从仓库移除（git 历史仍可查）。
 
 ## ✨ 功能
 
 | 模块 | 说明 |
 |---|---|
-| ⚙️ **配置** | 自动检测 `openocd` 可执行文件与脚本目录；两个独立的 cfg 单选框 —— 接口（`-f interface/*.cfg`）在前、目标/板级（`-f target/*.cfg` 或 `board/*.cfg`）在后，加载顺序不会错；附加命令（`-c`）、端口、调试级别、连接预设（共享 `~/.openocd_gui` 布局） |
+| ⚙️ **配置** | 自动检测 `openocd` 可执行文件与脚本目录；两个独立的 cfg 选择框，支持输入筛选（type-to-search）—— 接口（`-f interface/*.cfg`）在前、目标/板级（`-f target/*.cfg` 或 `board/*.cfg`）在后，加载顺序不会错，另有接口行与目标/板级行各自的只读 **查看 cfg 内容** 按钮；自动检测到多个 `openocd` 时会弹窗可选；附加命令（`-c`）、端口、可选的 OpenOCD 日志文件（等价 `-l`）、调试级别；连接预设的保存与加载就在这同一个字段集里（共享 `~/.openocd_gui` 布局） |
 | 📜 **日志** | 彩色分级实时输出、过滤、自动滚动 |
 | 💻 **控制台** | 基于 TCL RPC 端口的交互式命令行、历史记录、快捷命令 |
 | 🎯 **目标** | 目标表格自动轮询、halt / resume / 软复位 / reset（halt·run·init）、切换当前目标 |
 | 🧮 **寄存器** | 分组寄存器转储、筛选、暂停时自动刷新、双击改值 |
-| 🧠 **内存** | 8/16/32/64 位十六进制查看/编辑器、翻页、ASCII 列、双击改值 |
-| ⬇️ **烧写** | 一键固件烧写（`program`，支持 verify / preverify / reset / 偏移；非 ASCII 路径自动按 ANSI 编码页编码）、flash bank 信息、扇区擦除 |
-| 🛑 **断点** | 硬件/软件断点与观察点（`bp/rbp/wp/rwp`）列表化管理 |
-| 🔗 **GDB** | 连接信息、一键复制命令行、一键启动外部 GDB |
+| 🧠 **内存** | 8/16/32/64 位十六进制查看/编辑器、翻页、ASCII 列、双击改值，默认读取数量 160 |
+| ⬇️ **烧写** | 一键固件烧写（`program`，支持 verify / preverify / reset / 偏移；非 ASCII 路径自动按 ANSI 编码页编码）、flash bank 信息（表格加高，并补上 名称 / 驱动 / 基址 / 大小 / 总线宽 / 芯片宽 的列说明）、扇区擦除 |
+| 🛑 **断点** | 硬件/软件断点与观察点（`bp/rbp/wp/rwp`）列表化管理；表格行可点选，**删除选中** 作用于选中行，另有 `#` 序号列，增删失败会显示失败原因 |
+| 🔗 **GDB** | 连接信息、一键复制命令行、一键启动外部 GDB，以及 **自动检测**（扫描 `PATH` 与常见 Arm GNU Toolchain 安装位置）与 **检测版本**；多个候选以弹窗和路径框下拉两种方式列出 |
+| ℹ️ **关于** | 版本信息、OpenOCD 版本检测、配置目录，以及 OpenOCD 官方文档 / 本项目 / P4rfa1t/OpenOCD 三个可点击链接 |
+
+### 🆕 本轮新增（v0.3.2）
+
+- **配置** —— 接口 cfg / 目标·板级 cfg 改为可输入筛选（type-to-search）的选择框，脚本库条目再多也能秒搜
+- **查看 cfg 内容** —— 拆成两个按钮，分别放在接口 cfg 行与目标/板级 cfg 行上，各自只读预览该行 cfg 全文（含路径），不再是一个总按钮
+- **日志文件（服务端口 / 调试）** —— 恢复文件选择按钮：OpenOCD 会把自身日志追加写入该文件，等价命令行 `-l`；留空则输出只显示在日志页
+- **烧写** —— Flash 存储体表格加高，并补充列说明（名称 / 驱动 / 基址 / 大小 / 总线宽 / 芯片宽）
+- **GDB** —— 新增「自动检测」（扫描 `PATH` 与常见 Arm GNU Toolchain 安装位置）与「检测版本」
+- **关于** —— 新增页面：版本信息、OpenOCD 版本检测、配置目录，以及 OpenOCD 官方文档 / 本项目 / P4rfa1t/OpenOCD 三个可点击链接
+- **断点 / 观察点** —— 表格行可点选，「删除选中」作用于选中行，新增 `#` 序号列，表格加高
+- **断点 / 观察点，失败反馈** —— 增删失败时会显示失败原因（表格下方的 `#bp-hint` / `#wp-hint` 行内提示 + 日志页 + 弹窗）；OpenOCD 拒绝参数时会提示 `bp` / `wp` 只接受十六进制数值地址，`main` 这类符号名与 `0x…+4` 这类表达式都不会被解析
+- **多候选选择** —— 自动检测到多个 OpenOCD 或 GDB 时会弹窗让你选用其中一个；路径框下拉里也会列出全部候选，不必重新检测即可切换
+- **内存** —— 默认读取数量 160
+- **断点 / 观察点，实时计数** —— 表格会显示当前注册的条目数（`#bp-count` / `#wp-count`）；空表不再看着像坏掉，而是渲染一行占位说明
+- **断点 / 观察点，成败判定改为核对条目数** —— 不再看 TCL 返回值：OpenOCD 的 `breakpoint_add` 失败时只把原因写进它自己的日志、TCL 侧照样回空串，所以本工具在每条命令后重新列一遍断点/观察点，比对条目数来判定成败
+- **断点 / 观察点，前置校验** —— 发送命令前先校验地址与长度：长度只能是 1 / 2 / 4，地址必须是长度的整数倍（提示里直接给出最近的合法地址）
+- **Hybrid 断点** —— 解析器现在会识别 OpenOCD 在 Hybrid 断点下方追加的 `|--->linked with ContextID: 0x…` 续行，并把它挂到上一条断点上
+- **版本** —— 0.3.2
 
 ## 🚀 快速开始
 
@@ -87,12 +106,9 @@ OpenOCD-GUI/
 │   └── src/main.rs       #   openocd 进程管理、TCL RPC 客户端（0x1A 帧、
 │                         #   ANSI 路径编码）、监督/轮询线程、
 │                         #   设置与预设（~/.openocd_gui，JSON）
-├── ui/                   # Web 前端（原生 HTML/CSS/JS，无 node 构建）
-│   ├── index.html        #   布局与样式
-│   └── app.js            #   页面逻辑、OpenOCD 输出解析器、IPC
-├── exe/                  # 本地构建产物（二进制已 gitignore，含 README）
-└── docs/
-    └── framework-evaluation.md   # 选型依据（六框架实测对比）
+└── ui/                   # Web 前端（原生 HTML/CSS/JS，无 node 构建）
+    ├── index.html        #   布局与样式
+    └── app.js            #   页面逻辑、OpenOCD 输出解析器、IPC
 ```
 
 GUI 与 OpenOCD 只通过两个通道通信：子进程 **stdout**（→ 日志视图）和 **TCL RPC** 端口（帧格式 = `命令 + 0x1A` → `结果 + 0x1A`）。不链接、不修改 OpenOCD 内部实现。

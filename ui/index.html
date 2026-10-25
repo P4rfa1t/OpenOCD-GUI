@@ -36,6 +36,17 @@
   .prompt { color:#34d399; font-weight:bold; }
   label.chk { display:flex; align-items:center; gap:4px; }
   .table-wrap { overflow:auto; max-height:300px; border:1px solid var(--line); border-radius:4px; }
+  #bp-table tbody tr, #wp-table tbody tr { cursor:pointer; }
+  #bp-table tbody tr:hover, #wp-table tbody tr:hover { background:#f1f5f9; }
+  tr.sel td { background:#dbeafe; }
+  .modal { display:none; position:fixed; inset:0; background:rgba(15,23,42,.45); z-index:60;
+           align-items:center; justify-content:center; }
+  .modal.open { display:flex; }
+  .modal-box { background:#fff; border-radius:8px; padding:10px 12px; width:min(940px,92vw); max-height:84vh;
+               display:flex; flex-direction:column; gap:8px; }
+  .modal-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  #modal-body { margin:0; overflow:auto; flex:1; max-height:72vh; background:#111827; color:#e5e7eb;
+                border-radius:6px; padding:10px; font:12px Consolas,monospace; white-space:pre; }
   #statusbar { position:fixed; bottom:0; left:0; right:0; display:flex; gap:20px; padding:3px 12px;
     background:#e5e7eb; font-size:12px; color:#4b5563; }
   #status-msg { margin-left:auto; color:var(--blue); }
@@ -54,7 +65,7 @@
   <!-- 配置 -->
   <div class="page" id="page-config">
     <fieldset><legend>OpenOCD 程序</legend>
-      <div class="row"><input id="cfg-exe" style="flex:1"><button class="btn" id="cfg-exe-browse">浏览…</button>
+      <div class="row"><input id="cfg-exe" list="cfg-exe-list" style="flex:1" placeholder="点一下看全部候选，输入关键字筛选"><datalist id="cfg-exe-list"></datalist><button class="btn" id="cfg-exe-browse">浏览…</button>
       <button class="btn" id="cfg-autodetect">自动检测</button><button class="btn" id="cfg-version">检测版本</button>
       <span class="muted" id="cfg-version-label">版本: 未知</span></div>
     </fieldset>
@@ -63,14 +74,25 @@
       <button class="btn" id="cfg-rescan">重新扫描</button><span class="muted" id="cfg-scan-label">未扫描</span></div>
     </fieldset>
     <fieldset><legend>配置文件 (-f：先接口、后目标/板级，各仅一项)</legend>
-      <div class="row">接口 cfg: <select id="cfg-interface" style="flex:1"></select>
+      <div class="row">接口 cfg: <input id="cfg-interface" list="cfg-interface-list" style="flex:1"
+        placeholder="点一下看全部，输入关键字即筛选，如 stlink / jlink / cmsis-dap">
+        <datalist id="cfg-interface-list"></datalist>
         <button class="btn" id="cfg-interface-browse">浏览…</button>
-        <button class="btn" id="cfg-interface-clear">清除</button></div>
-      <div class="row">目标/板级 cfg: <select id="cfg-target" style="flex:1"></select>
+        <button class="btn" id="cfg-interface-clear">清除</button><button class="btn" id="cfg-interface-preview">查看内容</button></div>
+      <div class="row">目标/板级 cfg: <input id="cfg-target" list="cfg-target-list" style="flex:1"
+        placeholder="输入关键字筛选，如 stm32f1 / stm32f4 / board">
+        <datalist id="cfg-target-list"></datalist>
         <button class="btn" id="cfg-target-browse">浏览…</button>
-        <button class="btn" id="cfg-target-clear">清除</button></div>
+        <button class="btn" id="cfg-target-clear">清除</button><button class="btn" id="cfg-target-preview">查看内容</button></div>
+      <p class="muted">「查看内容」只读预览该行 cfg 的全文（不修改文件）。</p>
       <p class="muted" id="cfg-order-preview">未选择 cfg</p>
+      <p class="muted" id="cfg-warn"></p>
       <p class="muted">加载顺序固定：接口 → 目标/板级。使用 board/*.cfg 时它通常已包含接口与目标，接口可留空。</p>
+      <p class="muted">配置预设（把上面这一组配置存成命名预设，保存在本工具的配置文件里；换板子时一键加载）：</p>
+      <div class="row"><select id="profile-select" style="flex:1"></select>
+        <button class="btn" id="profile-save">保存为预设</button>
+        <button class="btn" id="profile-load">加载</button>
+        <button class="btn" id="profile-delete">删除</button></div>
     </fieldset>
     <fieldset><legend>附加命令 (-c，每行一条，如 adapter speed 3000)</legend>
       <textarea id="cfg-cmds" rows="3" style="width:100%"></textarea>
@@ -78,14 +100,11 @@
     <fieldset><legend>服务端口与调试</legend>
       <div class="row">GDB <input id="cfg-gdb" style="width:70px"> TCL <input id="cfg-tcl" style="width:70px">
         Telnet <input id="cfg-telnet" style="width:70px"> 监听 <input id="cfg-bind" style="width:110px">
-        调试级别 <select id="cfg-debug"><option>0（默认）</option><option>1（最少）</option><option>2（警告）</option><option>3（信息）</option><option>4（调试）</option></select>
-        日志文件 <input id="cfg-logfile" style="flex:1"></div>
-    </fieldset>
-    <fieldset><legend>配置预设</legend>
-      <div class="row"><select id="profile-select" style="flex:1"></select>
-        <button class="btn" id="profile-save">保存为预设</button>
-        <button class="btn" id="profile-load">加载</button>
-        <button class="btn" id="profile-delete">删除</button></div>
+        调试级别 <select id="cfg-debug"><option>0（默认）</option><option>1（最少）</option><option>2（警告）</option><option>3（信息）</option><option>4（调试）</option></select></div>
+      <div class="row">日志文件 (-l): <input id="cfg-logfile" style="flex:1" placeholder="留空 = 只在「日志」页显示；填了 = OpenOCD 把自身日志追加写入该文件">
+        <button class="btn" id="cfg-logfile-browse">选择…</button>
+        <button class="btn" id="cfg-logfile-clear">清除</button></div>
+      <p class="muted">日志文件 = OpenOCD 进程自己的运行日志（等价命令行 -l &lt;文件&gt;，内容与「日志」页一致，追加写入，便于事后排查或交给别人看）。留空则不落盘。</p>
     </fieldset>
   </div>
 
@@ -133,7 +152,7 @@
   <!-- 内存 -->
   <div class="page" id="page-mem">
     <div class="row">地址: <input id="mem-addr" value="0x08000000" style="width:120px">
-      数量: <input id="mem-count" type="number" value="64" min="1" max="1024" style="width:70px">
+      数量: <input id="mem-count" type="number" value="160" min="1" max="1024" style="width:70px">
       宽度: <select id="mem-width"><option>32 位 (mdw)</option><option>16 位 (mdh)</option><option>8 位 (mdb)</option><option>64 位 (mdd)</option></select>
       <button class="btn" id="mem-read">读取</button>
       <button class="btn" id="mem-prev">◀ 上一页</button><button class="btn" id="mem-next">下一页 ▶</button>
@@ -158,9 +177,10 @@
         信息输出: <input id="fl-bank-num" value="0" style="width:40px"><button class="btn" id="fl-info">信息 (flash info)</button>
         扇区范围: <input id="fl-first" value="0" style="width:40px"> - <input id="fl-last" value="last" style="width:60px">
         <button class="btn" id="fl-erase">擦除扇区</button></div>
-      <div class="table-wrap" style="max-height:140px"><table id="fl-table"><thead>
+      <div class="table-wrap" style="max-height:230px"><table id="fl-table"><thead>
         <tr><th>#</th><th>名称</th><th>驱动</th><th>基址</th><th>大小</th><th>总线宽</th><th>芯片宽</th></tr>
       </thead><tbody></tbody></table></div>
+      <p class="muted">Flash 存储体 = OpenOCD 识别到的可烧写 flash，来自 <code>flash banks</code>：名称 / 驱动 / 基址 / 大小 / 总线宽 / 芯片宽。「烧写固件」「烧写前/后校验」「擦除扇区」都作用在这些存储体上；多片 flash（如内部 + 外部 QSPI）会列出多行，用「信息输出」里的编号指定操作对象。</p>
     </fieldset>
     <div id="flash-out"></div>
   </div>
@@ -169,21 +189,36 @@
   <div class="page" id="page-bp">
     <fieldset><legend>断点 (bp / rbp)</legend>
       <div class="row">类型: <select id="bp-type"><option>软件 (默认)</option><option>硬件 (hw)</option></select>
-        地址: <input id="bp-addr" style="width:130px"> 长度: <select id="bp-len"><option>1</option><option selected>2</option><option>4</option><option>8</option></select>
+        地址: <input id="bp-addr" style="width:180px" placeholder="0x08000100（十六进制地址）">
+        长度: <select id="bp-len"><option>1</option><option selected>2</option><option>4</option></select>
         <button class="btn" id="bp-add">添加断点</button>
-        <button class="btn" id="bp-del">删除选中</button><button class="btn" id="bp-delall">全部删除</button>
-        <button class="btn" id="bp-refresh">刷新</button></div>
-      <div class="table-wrap" style="max-height:180px"><table id="bp-table"><thead>
-        <tr><th>类型</th><th>地址</th><th>长度</th><th>备注</th></tr></thead><tbody></tbody></table></div>
+        <span style="flex:1"></span>
+        <button class="btn" id="bp-refresh">刷新</button>
+        <span class="muted" id="bp-count" style="margin-left:8px"></span></div>
+      <p class="muted" id="bp-hint">添加或删除后在这里显示结果与失败原因。</p>
+      <div class="table-wrap" style="max-height:230px"><table id="bp-table"><thead>
+        <tr><th style="width:48px">#</th><th style="width:110px">类型</th><th>地址</th><th style="width:60px">长度</th><th>备注</th></tr>
+      </thead><tbody></tbody></table></div>
+      <div class="row"><button class="btn" id="bp-del">删除选中</button>
+        <button class="btn" id="bp-delall">全部删除</button>
+        <span class="muted">单击表格行选中（高亮），「删除选中」只删高亮那一行</span></div>
     </fieldset>
     <fieldset><legend>观察点 (wp / rwp)</legend>
-      <div class="row">地址: <input id="wp-addr" style="width:130px"> 长度: <select id="wp-len"><option>1</option><option>2</option><option selected>4</option><option>8</option></select>
+      <div class="row">地址: <input id="wp-addr" style="width:160px" placeholder="0x20000000（十六进制地址）">
+        长度: <select id="wp-len"><option>1</option><option>2</option><option selected>4</option></select>
         访问: <select id="wp-access"><option>读 (r)</option><option>写 (w)</option><option selected>读写 (a)</option></select>
         值(可选): <input id="wp-value" style="width:90px"> 掩码(可选): <input id="wp-mask" style="width:90px">
         <button class="btn" id="wp-add">添加观察点</button>
-        <button class="btn" id="wp-del">删除选中</button><button class="btn" id="wp-delall">全部删除</button></div>
-      <div class="table-wrap" style="max-height:180px"><table id="wp-table"><thead>
-        <tr><th>地址</th><th>长度</th><th>访问</th><th>值</th><th>掩码</th></tr></thead><tbody></tbody></table></div>
+        <span style="flex:1"></span>
+        <button class="btn" id="wp-refresh">刷新</button>
+        <span class="muted" id="wp-count" style="margin-left:8px"></span></div>
+      <p class="muted" id="wp-hint">添加或删除后在这里显示结果与失败原因。</p>
+      <div class="table-wrap" style="max-height:230px"><table id="wp-table"><thead>
+        <tr><th style="width:48px">#</th><th>地址</th><th style="width:60px">长度</th><th style="width:80px">访问</th><th>值</th><th>掩码</th></tr>
+      </thead><tbody></tbody></table></div>
+      <div class="row"><button class="btn" id="wp-del">删除选中</button>
+        <button class="btn" id="wp-delall">全部删除</button>
+        <span class="muted">单击表格行选中（高亮），「删除选中」只删高亮那一行</span></div>
     </fieldset>
   </div>
 
@@ -191,13 +226,52 @@
   <div class="page" id="page-gdb">
     <fieldset><legend>GDB 服务器</legend><p id="gdb-info"></p></fieldset>
     <fieldset><legend>外部 GDB 调试器</legend>
-      <div class="row">GDB 程序: <input id="gdb-path" style="flex:1"></div>
+      <div class="row">GDB 程序: <input id="gdb-path" list="gdb-path-list" style="flex:1" placeholder="点一下看全部候选，输入关键字筛选"><datalist id="gdb-path-list"></datalist><button class="btn" id="gdb-browse">浏览…</button>
+        <button class="btn" id="gdb-autodetect">自动检测</button>
+        <button class="btn" id="gdb-version">检测版本</button>
+        <span class="muted" id="gdb-version-label">版本: 未知</span></div>
       <div class="row">GDB 参数: <input id="gdb-args" style="flex:1"></div>
       <p id="gdb-preview" style="color:var(--blue);font-family:Consolas,monospace"></p>
       <div class="row"><button class="btn" id="gdb-copy">复制命令行</button>
         <button class="btn" id="gdb-launch">在新控制台启动 GDB</button></div>
+      <p class="muted">自动检测会依次扫描 PATH 与常见安装位置（Arm GNU Toolchain / gdb-multiarch），找到就填进上面的路径框；找到多个时会全部列进路径框的下拉候选，点开即可换一个。</p>
     </fieldset>
   </div>
+
+  <!-- 关于 -->
+  <div class="page" id="page-about">
+    <fieldset><legend>版本</legend>
+      <div class="row">OpenOCD-GUI: <b id="about-version">—</b>
+        <span class="muted" id="about-built">（Tauri 2 · WebView2 / WebKitGTK）</span>
+        <button class="btn" id="about-check-update">获取更新版本</button>
+        <button class="btn" id="about-open-release" style="display:none">打开下载页</button>
+        <button class="btn" id="about-release-notes" style="display:none">更新说明</button>
+        <span class="muted" id="about-update-status"></span></div>
+      <div class="row">OpenOCD: <b id="about-openocd">未知</b> <span class="muted" id="about-openocd-path"></span>
+        <button class="btn" id="about-detect">检测版本</button></div>
+      <div class="row">配置文件目录: <span class="muted" id="about-configdir">—</span>
+        <button class="btn" id="about-open-configdir">打开目录</button></div>
+    </fieldset>
+    <fieldset><legend>链接（在系统浏览器中打开）</legend>
+      <div class="row">
+        <button class="btn link" data-url="https://openocd.org/doc/html/index.html">OpenOCD 官方文档</button>
+        <button class="btn link" data-url="https://github.com/P4rfa1t/OpenOCD-GUI">本项目 · OpenOCD-GUI</button>
+        <button class="btn link" data-url="https://github.com/P4rfa1t/OpenOCD">我的 OpenOCD · P4rfa1t/OpenOCD</button></div>
+      <p class="muted">OpenOCD 官方文档：https://openocd.org/doc/html/index.html</p>
+      <p class="muted">本项目：https://github.com/P4rfa1t/OpenOCD-GUI</p>
+      <p class="muted">我的 OpenOCD：https://github.com/P4rfa1t/OpenOCD</p>
+    </fieldset>
+    <fieldset><legend>说明</legend>
+      <p class="muted">OpenOCD-GUI 是 OpenOCD 的图形前端：负责拼出 OpenOCD 命令行、管理 OpenOCD 进程、通过 TCL 端口读写目标状态（目标 / 寄存器 / 内存 / 断点 / 烧写）。真正的调试协议与 flash 算法都来自 OpenOCD 本体；GDB 与编译器不由本项目提供。</p>
+    </fieldset>
+  </div>
+
+  <div id="modal" class="modal"><div class="modal-box">
+    <div class="modal-head"><b id="modal-title"></b>
+      <span><button class="btn" id="modal-copy">复制</button><button class="btn" id="modal-close">关闭</button></span></div>
+    <pre id="modal-body"></pre>
+    <div class="row" id="modal-choices" style="display:none"></div>
+  </div></div>
 
   <div id="statusbar"><span id="sb-ports"></span><span id="status-msg"></span></div>
   <script src="app.js"></script>

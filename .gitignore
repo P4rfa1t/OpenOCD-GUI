@@ -4,11 +4,6 @@ src-tauri/gen/
 # machine-specific toolchain config (e.g. mingw linker) — see README
 src-tauri/.cargo/config.toml
 
-# local build outputs / distribution binaries
-exe/*.exe
-exe/*.dll
-exe/*.bak
-
 # editor / OS
 .idea/
 .vscode/

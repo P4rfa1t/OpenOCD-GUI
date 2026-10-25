@@ -772,6 +772,367 @@ fn shell_quote(s: &str) -> String {
     out
 }
 
+// ---------------------------------------------------------------- gdb 自动检测
+#[cfg(windows)]
+fn gdb_bin_names() -> &'static [&'static str] {
+    &[
+        "arm-none-eabi-gdb.exe",
+        "gdb-multiarch.exe",
+        "gdb.exe",
+        "arm-none-eabi-gdb",
+        "gdb-multiarch",
+        "gdb",
+    ]
+}
+
+#[cfg(not(windows))]
+fn gdb_bin_names() -> &'static [&'static str] {
+    &["arm-none-eabi-gdb", "gdb-multiarch", "gdb"]
+}
+
+/// 版本号写在目录名里的工具链没法硬编码：扫一遍常见安装根目录下的 bin
+#[cfg(windows)]
+fn scan_toolchain_roots(out: &mut Vec<String>) {
+    let roots = [
+        r"C:\Program Files (x86)",
+        r"C:\Program Files",
+        r"C:\msys64\ucrt64\bin",
+        r"C:\msys64\mingw64\bin",
+        r"C:\msys64\usr\bin",
+    ];
+    for root in roots {
+        let rd = match std::fs::read_dir(root) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().to_lowercase();
+            if p.is_dir() {
+                if name.contains("arm") || name.contains("xpack") || name.contains("gnu") {
+                    out.push(p.join("bin").join("arm-none-eabi-gdb.exe").to_string_lossy().to_string());
+                }
+            } else {
+                let n = e.file_name().to_string_lossy().to_lowercase();
+                if n.ends_with("gdb.exe") {
+                    out.push(p.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn scan_toolchain_roots(_out: &mut Vec<String>) {}
+
+fn gdb_extra_candidates() -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    if cfg!(windows) {
+        for extra in [
+            r"C:\msys64\ucrt64\bin\gdb.exe",
+            r"C:\msys64\mingw64\bin\gdb.exe",
+            r"C:\msys64\usr\bin\gdb.exe",
+        ] {
+            v.push(extra.to_string());
+        }
+        if let Ok(la) = std::env::var("LOCALAPPDATA") {
+            if !la.is_empty() {
+                v.push(format!(r"{}\Programs\Arm GNU Toolchain arm-none-eabi\bin\arm-none-eabi-gdb.exe", la));
+            }
+        }
+        scan_toolchain_roots(&mut v);
+    } else {
+        for extra in [
+            "/usr/bin/arm-none-eabi-gdb",
+            "/usr/local/bin/arm-none-eabi-gdb",
+            "/usr/bin/gdb-multiarch",
+            "/usr/bin/gdb",
+            "/opt/homebrew/bin/arm-none-eabi-gdb",
+            "/opt/local/bin/arm-none-eabi-gdb",
+            "/snap/bin/arm-none-eabi-gdb",
+        ] {
+            v.push(extra.to_string());
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            if !home.is_empty() {
+                v.push(format!("{}/.local/bin/arm-none-eabi-gdb", home));
+                v.push(format!("{}/.cargo/bin/arm-none-eabi-gdb", home));
+            }
+        }
+    }
+    v
+}
+
+fn find_gdb_candidates() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |p: std::path::PathBuf| {
+        if p.is_file() {
+            let s = p.to_string_lossy().to_string();
+            if !out.contains(&s) {
+                out.push(s);
+            }
+        }
+    };
+    for dir in std::env::split_paths(&std::env::var("PATH").unwrap_or_default()) {
+        for name in gdb_bin_names() {
+            push(dir.join(name));
+        }
+    }
+    for extra in gdb_extra_candidates() {
+        push(std::path::PathBuf::from(extra));
+    }
+    out
+}
+
+#[tauri::command]
+fn detect_gdb() -> Vec<String> {
+    find_gdb_candidates()
+}
+
+// ---------------------------------------------------------------- 关于页 / 只读预览
+#[tauri::command]
+fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
+fn config_dir_path() -> String {
+    config_dir().to_string_lossy().to_string()
+}
+
+#[tauri::command]
+fn read_text_file(path: String) -> Result<String, String> {
+    const MAX: u64 = 512 * 1024;
+    let p = std::path::PathBuf::from(&path);
+    if !p.is_file() {
+        return Err(format!("文件不存在: {}", path));
+    }
+    let meta = std::fs::metadata(&p).map_err(|e| e.to_string())?;
+    if meta.len() > MAX {
+        return Err(format!("文件过大（{} 字节），预览上限 {} 字节，请用外部编辑器打开", meta.len(), MAX));
+    }
+    let bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&bytes).to_string())
+}
+
+#[cfg(windows)]
+fn open_with_system(target: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    let mut c = Command::new("cmd");
+    c.args(["/C", "start", "", target]);
+    c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    c.spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn open_with_system(target: &str) -> Result<(), String> {
+    Command::new("open")
+        .arg(target)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn open_with_system(target: &str) -> Result<(), String> {
+    Command::new("xdg-open")
+        .arg(target)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    let u = url.trim().to_string();
+    if !(u.starts_with("http://") || u.starts_with("https://")) {
+        return Err("只允许 http/https 链接".into());
+    }
+    open_with_system(&u)
+}
+
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    let p = path.trim().to_string();
+    if p.is_empty() {
+        return Err("路径为空".into());
+    }
+    open_with_system(&p)
+}
+
+// ---------------------------------------------------------------- 检查更新（GitHub）
+// 版本号比较：去掉前导 v、忽略 -pre/+build 后缀，逐段按数字比大小
+fn version_newer(latest: &str, current: &str) -> bool {
+    fn key(v: &str) -> Vec<u64> {
+        let s = v.trim().trim_start_matches(['v', 'V']);
+        let core = s.split(|c| c == '-' || c == '+').next().unwrap_or("");
+        core.split('.').map(|p| p.parse::<u64>().unwrap_or(0)).collect()
+    }
+    let a = key(latest);
+    let b = key(current);
+    for i in 0..a.len().max(b.len()) {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
+        if x != y {
+            return x > y;
+        }
+    }
+    false
+}
+
+fn run_capture(prog: &str, args: &[&str]) -> Result<String, String> {
+    let mut c = Command::new(prog);
+    c.args(args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let out = c.output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let tail = if err.is_empty() { String::new() } else { format!(": {}", err) };
+        return Err(format!("{:?}{}", out.status.code(), tail));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+// 用系统自带的命令行工具发一次 GET，返回 (HTTP 状态码, 正文)。
+// curl 优先（-w 把状态码附在正文末尾），wget 兜底；两者都不在才报错。
+// 有些 Windows 机器/网络的 schannel 吊销检查会失败（CRYPT_E_NO_REVOCATION_CHECK），
+// 这时用 --ssl-no-revoke 再试一次：证书链仍然校验，只是跳过吊销查询。
+fn http_get(url: &str) -> Result<(u32, String), String> {
+    let base: [&str; 9] = [
+        "-sSL",
+        "--max-time",
+        "12",
+        "-H",
+        "User-Agent: OpenOCD-GUI",
+        "-H",
+        "Accept: application/vnd.github+json",
+        "-w",
+        "\n%{http_code}",
+    ];
+    let mut last = String::from("curl 不可用");
+    for extra in ["", "--ssl-no-revoke"] {
+        let mut args: Vec<&str> = Vec::with_capacity(11);
+        if !extra.is_empty() {
+            args.push(extra);
+        }
+        args.extend_from_slice(&base);
+        args.push(url);
+        match run_capture("curl", &args) {
+            Ok(out) => {
+                let t = out.trim_end();
+                if let Some(i) = t.rfind('\n') {
+                    let code = t[i + 1..].trim().parse::<u32>().unwrap_or(200);
+                    if code != 0 {
+                        return Ok((code, t[..i].to_string()));
+                    }
+                    last = "curl 返回状态码 000".into();
+                } else {
+                    return Ok((200, t.to_string()));
+                }
+            }
+            Err(e) => last = format!("curl {}", e),
+        }
+    }
+    if let Ok(out) = run_capture(
+        "wget",
+        &["-q", "-O", "-", "--timeout=12", "--header=User-Agent: OpenOCD-GUI", url],
+    ) {
+        return Ok((200, out));
+    }
+    Err(format!("无法发起网络请求（{}）", last))
+}
+
+#[derive(Serialize)]
+struct UpdateInfo {
+    current: String,
+    latest: String,
+    tag: String,
+    has_update: bool,
+    name: String,
+    url: String,
+    published_at: String,
+    notes: String,
+    prerelease: bool,
+    source: String,
+}
+
+// 包一层 async：HTTP 探测是阻塞式外部进程调用，丢到后台线程，避免占住 IPC 处理路径
+//（打开「关于」页会自动触发一次；无网络时要等 curl/wget 超时）
+#[tauri::command]
+async fn check_update() -> Result<UpdateInfo, String> {
+    tauri::async_runtime::spawn_blocking(check_update_blocking)
+        .await
+        .map_err(|e| format!("更新检查任务失败: {}", e))?
+}
+
+fn check_update_blocking() -> Result<UpdateInfo, String> {
+    const API: &str = "https://api.github.com/repos/P4rfa1t/OpenOCD-GUI";
+    const WEB: &str = "https://github.com/P4rfa1t/OpenOCD-GUI";
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    let field = |v: &serde_json::Value, k: &str| {
+        v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string()
+    };
+
+    let (code, body) = http_get(&format!("{}/releases/latest", API))?;
+    if code == 200 {
+        let j: serde_json::Value =
+            serde_json::from_str(&body).map_err(|e| format!("解析 GitHub 响应失败: {}", e))?;
+        let tag = field(&j, "tag_name");
+        if tag.is_empty() {
+            return Err("GitHub 的发布信息里没有 tag_name".into());
+        }
+        let html = field(&j, "html_url");
+        let notes = field(&j, "body");
+        return Ok(UpdateInfo {
+            has_update: version_newer(&tag, &current),
+            latest: tag.trim_start_matches(['v', 'V']).to_string(),
+            tag,
+            current,
+            name: field(&j, "name"),
+            url: if html.is_empty() { format!("{}/releases", WEB) } else { html },
+            published_at: field(&j, "published_at"),
+            notes: notes.chars().take(4000).collect(),
+            prerelease: j.get("prerelease").and_then(|x| x.as_bool()).unwrap_or(false),
+            source: "releases/latest".into(),
+        });
+    }
+
+    // 还没建 Release 时退到标签列表（GitHub 按时间倒序返回）
+    let (code2, body2) = http_get(&format!("{}/tags", API))?;
+    if code2 != 200 {
+        return Err(format!(
+            "GitHub 返回 HTTP {}（releases/latest 为 HTTP {}）",
+            code2, code
+        ));
+    }
+    let arr: serde_json::Value =
+        serde_json::from_str(&body2).map_err(|e| format!("解析 GitHub 响应失败: {}", e))?;
+    let first = arr
+        .as_array()
+        .and_then(|a| a.first())
+        .ok_or_else(|| "仓库还没有 Release 或标签，没有可比较的版本".to_string())?;
+    let tag = field(first, "name");
+    if tag.is_empty() {
+        return Err("仓库还没有 Release 或标签，没有可比较的版本".into());
+    }
+    Ok(UpdateInfo {
+        has_update: version_newer(&tag, &current),
+        latest: tag.trim_start_matches(['v', 'V']).to_string(),
+        current,
+        url: format!("{}/releases/tag/{}", WEB, tag),
+        tag,
+        name: String::new(),
+        published_at: String::new(),
+        notes: String::new(),
+        prerelease: false,
+        source: "tags".into(),
+    })
+}
+
 // ---------------------------------------------------------------- profiles
 #[tauri::command]
 fn list_profiles() -> Vec<String> {
@@ -821,6 +1182,20 @@ fn delete_profile(name: String) -> bool {
 
 // ---------------------------------------------------------------- main
 fn main() {
+    // 小工具：--check-update 只查一次 GitHub 最新版本，打印 JSON 后退出（脚本 / 冒烟测试用）
+    if std::env::args().any(|a| a == "--check-update") {
+        match check_update_blocking() {
+            Ok(info) => println!(
+                "{}",
+                serde_json::to_string_pretty(&info).unwrap_or_else(|e| e.to_string())
+            ),
+            Err(e) => {
+                println!("{{\"error\": {}}}", serde_json::Value::String(e));
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     let settings = load_settings_or_default();
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -855,6 +1230,13 @@ fn main() {
             load_profile,
             delete_profile,
             program_firmware,
+            detect_gdb,
+            read_text_file,
+            app_version,
+            config_dir_path,
+            open_url,
+            open_path,
+            check_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -6,21 +6,40 @@ A cross-platform GUI front-end for [OpenOCD](https://openocd.org) (verified agai
 
 [![Rust](https://img.shields.io/badge/rust-stable-orange)]() [![Tauri](https://img.shields.io/badge/Tauri-2-blue)]() [![License: MIT](https://img.shields.io/badge/license-MIT-green)]() [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 
-> **History**: v0.1.x was implemented in Python/Tkinter. In v0.2.0 the project moved to Tauri 2 as its primary framework — the Python implementation was removed from the tree (still in git history), and the framework evaluation behind this decision is preserved in [docs/framework-evaluation.md](docs/framework-evaluation.md) (measured comparison of Tkinter / PySide6 / PyQt6 / Tauri 2 / Wails v2 / Flutter).
+> **History**: v0.1.x was implemented in Python/Tkinter. In v0.2.0 the project moved to Tauri 2 as its primary framework — the Python implementation was removed from the tree (still in git history).
 
 ## ✨ Features
 
 | Module | Description |
 |---|---|
-| ⚙️ **Config** | Auto-detect the `openocd` executable & scripts dir, two independent single-select cfg slots — interface (`-f interface/*.cfg`) then target/board (`-f target/*.cfg` or `board/*.cfg`) — so load order can never be wrong; extra commands (`-c`), ports, debug level, connection presets (shared `~/.openocd_gui` layout) |
+| ⚙️ **Config** | Auto-detect the `openocd` executable & scripts dir, two independent cfg slots with type-to-search — interface (`-f interface/*.cfg`) then target/board (`-f target/*.cfg` or `board/*.cfg`) — so load order can never be wrong, plus a read-only **View cfg contents** button on each cfg row; a picker appears when auto-detect finds several `openocd` binaries; extra commands (`-c`), ports, optional OpenOCD log file (`-l` equivalent), debug level; named connection presets are saved and loaded inside this same fieldset (shared `~/.openocd_gui` layout) |
 | 📜 **Log** | Live colored OpenOCD output with level filtering, autoscroll |
 | 💻 **Console** | Interactive command console over the TCL RPC port, history, quick commands |
 | 🎯 **Target** | Target table with auto-polling, halt / resume / soft reset / reset (halt·run·init), switch current target |
 | 🧮 **Registers** | Register dump (grouped), filter, live refresh while halted, double-click to edit |
-| 🧠 **Memory** | Hex viewer/editor for 8/16/32/64-bit accesses, paging, ASCII column, double-click to modify |
-| ⬇️ **Flash** | One-click firmware programming (`program` with verify / preverify / reset / offset; non-ASCII paths encoded to the ANSI codepage), flash bank info, sector erase |
-| 🛑 **Breakpoints** | Hardware/software breakpoints and watchpoints (`bp/rbp/wp/rwp`) with list management |
-| 🔗 **GDB** | Connection info, ready-to-copy command line, one-click external GDB launch |
+| 🧠 **Memory** | Hex viewer/editor for 8/16/32/64-bit accesses, paging, ASCII column, double-click to modify, default read count 160 |
+| ⬇️ **Flash** | One-click firmware programming (`program` with verify / preverify / reset / offset; non-ASCII paths encoded to the ANSI codepage), flash bank info (taller table with a name / driver / base / size / bus width / chip width legend), sector erase |
+| 🛑 **Breakpoints** | Hardware/software breakpoints and watchpoints (`bp/rbp/wp/rwp`) with list management; clickable rows, *Delete selected* acts on the selection, `#` index column, failure reason shown for any failed add/remove |
+| 🔗 **GDB** | Connection info, ready-to-copy command line, one-click external GDB launch, *Auto-detect* (scans `PATH` and the usual Arm GNU Toolchain install locations) and *Detect version*; several candidates are offered in a picker and as path-field dropdown entries |
+| ℹ️ **About** | Version info, OpenOCD version detection, config directory, and three clickable links — OpenOCD documentation / this project / P4rfa1t/OpenOCD |
+
+### 🆕 New in this build (v0.3.2)
+
+- **Config** — the interface cfg and the target/board cfg slots are now type-to-search selects: type to filter, so a large scripts library is searched instantly
+- **View cfg contents** — split into two buttons, one on the interface cfg row and one on the target/board cfg row; each opens a read-only preview of that row's cfg in full (path included) instead of one shared button
+- **Log file (service ports / debug)** — the file-chooser button is back: OpenOCD appends its own log to that file, the equivalent of `-l` on the command line; leave it empty and output stays in the Log tab only
+- **Flash** — the flash-bank table is taller and now carries the column legend (name / driver / base / size / bus width / chip width)
+- **GDB** — new *Auto-detect* (scans `PATH` and the common Arm GNU Toolchain install locations) and *Detect version*
+- **About** — a new page: version info, OpenOCD version detection, the config directory, and three clickable links (OpenOCD documentation, this project, P4rfa1t/OpenOCD)
+- **Breakpoints / watchpoints** — table rows are clickable, *Delete selected* acts on the selected rows, plus a new `#` index column and a taller table
+- **Breakpoints / watchpoints, failure feedback** — a failed add/remove now reports the reason inline (`#bp-hint` / `#wp-hint` under the table), in the Log tab and as a popup; when OpenOCD rejects the argument, the hint points out that `bp` / `wp` take hexadecimal numeric addresses only — symbol names such as `main` and expressions such as `0x…+4` are not parsed
+- **Multiple candidates** — when auto-detect finds several OpenOCD or GDB binaries, a dialog lets you pick one; the path field also lists every candidate in its dropdown, so you can switch without re-detecting
+- **Memory** — the default read count is now 160
+- **Breakpoints / watchpoints, live counts** — the table shows how many entries are currently registered (`#bp-count` / `#wp-count`), and an empty table renders an inline placeholder row instead of looking broken
+- **Breakpoints / watchpoints, honest success verdict** — an add/remove is no longer judged by its TCL return value: when `breakpoint_add` fails, OpenOCD writes the reason only to its own log and still answers with an empty string, so the tool re-lists breakpoints/watchpoints after every command and compares the entry count
+- **Breakpoints / watchpoints, upfront validation** — address and length are checked before the command is sent: the length must be 1, 2 or 4, and the address must be a multiple of it (the hint prints the nearest aligned address to use)
+- **Hybrid breakpoints** — the parser now follows the `|--->linked with ContextID: 0x…` continuation line OpenOCD prints under a Hybrid breakpoint and attaches it to the entry above
+- **Version** — 0.3.2
 
 ## 🚀 Getting Started
 
@@ -87,12 +106,9 @@ OpenOCD-GUI/
 │   └── src/main.rs       #   openocd process mgmt, TCL RPC client (0x1A framing,
 │                         #   ANSI path encoding), supervision/polling threads,
 │                         #   settings & profiles (~/.openocd_gui, JSON)
-├── ui/                   # web frontend (vanilla HTML/CSS/JS, no node build)
-│   ├── index.html        #   layout + styling
-│   └── app.js            #   tab logic, OpenOCD output parsers, IPC
-├── exe/                  # local build outputs (gitignored binaries + README)
-└── docs/
-    └── framework-evaluation.md   # why Tauri 2 (measured 6-framework comparison)
+└── ui/                   # web frontend (vanilla HTML/CSS/JS, no node build)
+    ├── index.html        #   layout + styling
+    └── app.js            #   tab logic, OpenOCD output parsers, IPC
 ```
 
 The GUI talks to OpenOCD through exactly two channels: the **stdout** of the spawned process (→ log view) and the **TCL RPC** port (frame = `command + 0x1A` → `result + 0x1A`) for everything else. No OpenOCD internals are linked or patched.
