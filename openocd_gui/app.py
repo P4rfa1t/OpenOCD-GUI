@@ -44,6 +44,7 @@ class App:
         self.session = Session(self.bus, self.settings)
         self.ui_queue = queue.Queue()
         self.last_target_state = ""
+        self._log_capture = None  # list while a tab is mirroring LOG lines
 
         root.title("OpenOCD-GUI")
         root.minsize(980, 620)
@@ -229,6 +230,11 @@ class App:
         self.bus.emit(events.NOTIFY, (error, message))
 
     def _pump(self):
+        try:
+            if not self.root.winfo_exists():
+                return
+        except tk.TclError:
+            return
         for kind, payload in self.bus.drain():
             handler = {
                 events.LOG: self._on_log,
@@ -248,10 +254,23 @@ class App:
                 fn()
             except Exception as exc:  # keep the pump alive
                 print("UI callback error: %r" % exc, file=sys.stderr)
-        self.root.after(60, self._pump)
+        if self.root.winfo_exists():
+            self.root.after(60, self._pump)
 
     def _on_log(self, line):
         self.log_view.append_line(line)
+        if self._log_capture is not None:
+            self._log_capture.append(line)
+
+    def begin_log_capture(self):
+        """Mirror subsequent LOG lines until end_log_capture() (UI thread)."""
+        self._log_capture = []
+
+    def end_log_capture(self):
+        """Stop mirroring and return the captured lines (UI thread)."""
+        lines = self._log_capture if self._log_capture is not None else []
+        self._log_capture = None
+        return lines
 
     def _on_server_state(self, payload):
         state, detail = payload

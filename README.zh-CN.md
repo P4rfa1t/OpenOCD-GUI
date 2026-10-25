@@ -37,6 +37,12 @@ python run.py
 
 Windows 下也可直接双击 **`openocd_gui.pyw`**（无控制台窗口启动）。
 
+> **双击 `.pyw` 弹出空白终端？** 说明 `.pyw` 关联到了某个控制台程序（例如误放到 `C:\Windows` 的 `pyw.exe` 副本）。修复方法：把 `.pyw` 关联到 python.org 官方的无窗口 `pythonw.exe`：
+> ```bat
+> ftype Python.NoConFile="C:\Python安装路径\pythonw.exe" "%L" %*
+> ```
+> （或在 `HKCU\Software\Classes\Python.NoConFile\shell\open\command` 中按用户设置）。此外启动器本身在经 `python.exe` 打开时也会自动隐藏控制台窗口。
+
 ### 日常工作流
 
 1. **配置**页 → 设置可执行文件（或点“自动检测”），选择 `interface` + `target` 配置，按需添加附加命令如 `adapter speed 3000`、`transport select swd`

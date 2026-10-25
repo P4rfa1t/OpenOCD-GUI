@@ -37,6 +37,12 @@ python run.py          # Linux / macOS: python3 run.py
 
 On Windows you can also double-click **`openocd_gui.pyw`** (starts without a console window).
 
+> **A blank terminal appears when double-clicking the `.pyw`?** Your `.pyw` association points to a console program (e.g. a stray `pyw.exe` copy). Fix it by associating `.pyw` with the official windowless `pythonw.exe` that ships with python.org Python:
+> ```bat
+> ftype Python.NoConFile="C:\Path\To\Python3xx\pythonw.exe" "%L" %*
+> ```
+> (or set it per-user in `HKCU\Software\Classes\Python.NoConFile\shell\open\command`). The launcher also hides a console window on its own when launched through `python.exe`.
+
 ### Daily workflow
 
 1. **Config** tab → set the executable (or click *Auto-detect*), pick `interface` + `target` configs, optionally add extra commands such as `adapter speed 3000`, `transport select swd`
