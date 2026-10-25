@@ -1,2 +1,0 @@
-# OpenOCD-GUI only uses the Python standard library (tkinter included).
-# No third-party packages are required. Python 3.8+ is sufficient.

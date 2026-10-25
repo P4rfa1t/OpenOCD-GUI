@@ -1,14 +1,14 @@
-__pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-venv/
-build/
-dist/
-*.spec
-.idea/
-.vscode/
-ports/tauri2/src-tauri/target/
-ports/tauri2/src-tauri/gen/
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+# machine-specific toolchain config (e.g. mingw linker) — see README
+src-tauri/.cargo/config.toml
+
+# local build outputs / distribution binaries
 exe/*.exe
 exe/*.dll
+
+# editor / OS
+.idea/
+.vscode/
+__pycache__/

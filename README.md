@@ -2,108 +2,91 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-A cross-platform GUI front-end for [OpenOCD](https://openocd.org) (verified against OpenOCD **0.12.0+dev**), written in pure Python + Tkinter — **zero third-party dependencies**.
+A cross-platform GUI front-end for [OpenOCD](https://openocd.org) (verified against OpenOCD **0.12.0+dev**), built with **Tauri 2** — Rust backend + web frontend, packaged as a small native executable with no scripting runtime required.
 
-[![Python](https://img.shields.io/badge/python-3.8%2B-blue)]() [![License: MIT](https://img.shields.io/badge/license-MIT-green)]() [![No deps](https://img.shields.io/badge/dependencies-none-success)]() [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
+[![Rust](https://img.shields.io/badge/rust-stable-orange)]() [![Tauri](https://img.shields.io/badge/Tauri-2-blue)]() [![License: MIT](https://img.shields.io/badge/license-MIT-green)]() [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
+
+> **History**: v0.1.x was implemented in Python/Tkinter. In v0.2.0 the project moved to Tauri 2 as its primary framework — the Python implementation was removed from the tree (still in git history), and the framework evaluation behind this decision is preserved in [docs/framework-evaluation.md](docs/framework-evaluation.md) (measured comparison of Tkinter / PySide6 / PyQt6 / Tauri 2 / Wails v2 / Flutter).
 
 ## ✨ Features
 
 | Module | Description |
 |---|---|
-| ⚙️ **Config** | Auto-detect the `openocd` executable & scripts dir, searchable picker for `interface / target / board` scripts, ordered config list (`-f`), extra commands (`-c`), ports, debug level, connection presets |
-| 📜 **Log** | Live colored OpenOCD output with level filtering, autoscroll, session separators, export |
-| 💻 **Console** | Interactive command console over the TCL RPC port, command history, quick commands |
+| ⚙️ **Config** | Auto-detect the `openocd` executable & scripts dir, picker for `interface / target / board` scripts, ordered config list (`-f`), extra commands (`-c`), ports, debug level, connection presets (shared `~/.openocd_gui` layout) |
+| 📜 **Log** | Live colored OpenOCD output with level filtering, autoscroll |
+| 💻 **Console** | Interactive command console over the TCL RPC port, history, quick commands |
 | 🎯 **Target** | Target table with auto-polling, halt / resume / soft reset / reset (halt·run·init), switch current target |
-| 🧮 **Registers** | Full register dump (grouped), filter, live refresh while halted, double-click to edit |
-| 🧠 **Memory** | Hex viewer/editor for 8/16/32/64-bit accesses (`mdb/mdh/mdw/mdd`), paging, ASCII column, double-click to modify |
-| ⬇️ **Flash** | One-click firmware programming (`program` with verify / preverify / reset / offset), flash bank info, sector erase |
+| 🧮 **Registers** | Register dump (grouped), filter, live refresh while halted, double-click to edit |
+| 🧠 **Memory** | Hex viewer/editor for 8/16/32/64-bit accesses, paging, ASCII column, double-click to modify |
+| ⬇️ **Flash** | One-click firmware programming (`program` with verify / preverify / reset / offset; non-ASCII paths encoded to the ANSI codepage), flash bank info, sector erase |
 | 🛑 **Breakpoints** | Hardware/software breakpoints and watchpoints (`bp/rbp/wp/rwp`) with list management |
 | 🔗 **GDB** | Connection info, ready-to-copy command line, one-click external GDB launch |
 
 ## 🚀 Getting Started
 
-### Option 1 — Windows executable (recommended)
+### Option 1 — Download the Windows executable
 
-Download **[OpenOCD-GUI.exe](https://github.com/P4rfa1t/OpenOCD-GUI/releases/latest)** from the releases page — a single file, no Python installation needed, and **no console window ever** (GUI subsystem, independent of any `.pyw` file association). Note: some antivirus products may warn about unsigned PyInstaller binaries; the source build below is the alternative.
+Grab **`OpenOCD-GUI.exe`** + **`WebView2Loader.dll`** from the [releases](https://github.com/P4rfa1t/OpenOCD-GUI/releases/latest) page and keep **both files in the same folder**.
 
-### Option 2 — Run from source
+- WebView2 Runtime is required — preinstalled on Windows 10/11 (older systems: [Evergreen installer](https://developer.microsoft.com/microsoft-edge/webview2/))
+- The separate `WebView2Loader.dll` is only needed because the shipped build uses the **mingw** toolchain (dynamically linked loader); an MSVC-built exe embeds it statically — see build notes below
 
-#### Prerequisites
+### Option 2 — Build from source
 
-- **OpenOCD ≥ 0.12** on your system (the GUI uses the hierarchical `gdb port` / `tcl port` / `telnet port` syntax introduced in 0.12)
-- **Python 3.8+** with Tkinter (bundled with python.org installers; on Debian/Ubuntu: `apt install python3-tk`)
-
-#### Run
+Prerequisites: [Rust](https://rustup.rs) + OpenOCD ≥ 0.12 (the GUI uses the hierarchical `gdb port` / `tcl port` / `telnet port` syntax).
 
 ```bash
 git clone https://github.com/P4rfa1t/OpenOCD-GUI.git
-cd OpenOCD-GUI
-python run.py          # Linux / macOS: python3 run.py
+cd OpenOCD-GUI/src-tauri
+cargo build --release
 ```
 
-On Windows you can also double-click **`openocd_gui.pyw`** (starts without a console window).
+Toolchain notes:
 
-> **A blank terminal appears when double-clicking the `.pyw`?** Your `.pyw` association points to a console program (e.g. a stray `pyw.exe` copy). Fix it by associating `.pyw` with the official windowless `pythonw.exe` that ships with python.org Python:
-> ```bat
-> ftype Python.NoConFile="C:\Path\To\Python3xx\pythonw.exe" "%L" %*
-> ```
-> (or set it per-user in `HKCU\Software\Classes\Python.NoConFile\shell\open\command`). The launcher also hides a console window on its own when launched through `python.exe`.
+- **MSVC** (default on Windows): produces a single self-contained exe
+- **GNU/mingw** (`x86_64-pc-windows-gnu`): the build links `WebView2Loader.dll` dynamically — cargo drops the DLL next to the exe in `target/release/`; ship both files together. If your linker isn't in PATH, add `src-tauri/.cargo/config.toml` (gitignored, machine-specific):
+  ```toml
+  [target.x86_64-pc-windows-gnu]
+  linker = "C:/msys64/ucrt64/bin/gcc.exe"
+  ```
 
 ### Daily workflow
 
-1. **Config** tab → set the executable (or click *Auto-detect*), pick `interface` + `target` configs, optionally add extra commands such as `adapter speed 3000`, `transport select swd`
-2. Toolbar **▶ Start** → OpenOCD launches, the GUI auto-connects to its TCL RPC port
-3. Use the **Target / Registers / Memory / Breakpoints** tabs to control the target; **Flash** to program firmware
+1. **Config** tab → set the executable (or *Auto-detect*), pick `interface` + `target` configs, optionally add commands such as `adapter speed 3000`, `transport select swd`
+2. Toolbar **▶ 启动** → OpenOCD launches, the GUI auto-connects to its TCL RPC port (default 6666)
+3. Use **Target / Registers / Memory / Breakpoints** tabs to control the target; **Flash** to program firmware
 4. **GDB** tab gives you a ready-made command line (`target remote localhost:3333`) for an external GDB
-5. **■ Stop** sends a graceful `shutdown` to OpenOCD (falls back to terminate)
+5. **■ 停止** sends a graceful `shutdown` to OpenOCD (falls back to terminate)
 
 ## 🧱 Architecture
 
 ```
 OpenOCD-GUI/
-├── run.py / openocd_gui.pyw     # launchers
-├── openocd_gui/
-│   ├── app.py                   # main window, event pump, toolbar/status bar
-│   ├── core/
-│   │   ├── events.py            # thread-safe event bus
-│   │   ├── openocd.py           # process management + argv builder
-│   │   ├── tcl.py               # TCL RPC client (0x1A framing)
-│   │   ├── session.py           # supervision: connect/reconnect/polling
-│   │   ├── parsers.py           # output parsers (targets/reg/md/bp/wp/banks)
-│   │   ├── detector.py          # find openocd, scripts scanning
-│   │   └── settings.py          # settings & profiles (~/.openocd_gui)
-│   └── ui/                      # one module per tab + shared widgets
-└── tests/                       # unit tests for parsers & argv builder
+├── src-tauri/            # Rust backend
+│   └── src/main.rs       #   openocd process mgmt, TCL RPC client (0x1A framing,
+│                         #   ANSI path encoding), supervision/polling threads,
+│                         #   settings & profiles (~/.openocd_gui, JSON)
+├── ui/                   # web frontend (vanilla HTML/CSS/JS, no node build)
+│   ├── index.html        #   layout + styling
+│   └── app.js            #   tab logic, OpenOCD output parsers, IPC
+├── exe/                  # local build outputs (gitignored binaries + README)
+└── docs/
+    └── framework-evaluation.md   # why Tauri 2 (measured 6-framework comparison)
 ```
 
-The GUI talks to OpenOCD through exactly two channels:
+The GUI talks to OpenOCD through exactly two channels: the **stdout** of the spawned process (→ log view) and the **TCL RPC** port (frame = `command + 0x1A` → `result + 0x1A`) for everything else. No OpenOCD internals are linked or patched.
 
-- the **stdout** of the spawned process → colored log view
-- the **TCL RPC** port (default 6666, frame = `command + 0x1A` → `result + 0x1A`) → everything else (state polling, register/memory access, flash, breakpoints)
+### Debug hooks
 
-No OpenOCD internals are linked or patched, so it works with stock builds of OpenOCD 0.12+ as well as custom forks.
-
-## 🌍 Platform support
-
-Pure standard library, designed cross-platform. Developed and fully tested on **Windows**; the Linux/macOS code paths are in place (platform-guarded process flags, POSIX openocd detection paths) but not regularly exercised — feedback and patches welcome.
-
-## 🧪 Development
-
-```bash
-python -m unittest discover -s tests   # parser & command-builder tests
-python run.py --smoke                  # headless UI construction check
-```
-
-### Framework evaluation: PySide6 & Tauri 2 ports
-
-The same app has also been ported to [PySide6](ports/pyside6/) (reusing `openocd_gui/core/`) and [Tauri 2](ports/tauri2/) (Rust + vanilla JS rewrite), with measured size/memory/LOC comparison in [ports/COMPARISON.md](ports/COMPARISON.md). The Tkinter version in the repo root remains the primary front-end.
+- `OPENOCD_GUI_AUTOSTART=1` env var → the app presses **Start** by itself at launch (E2E testing)
+- `%TEMP%/ocd_gui_tauri.log` — backend/frontend diagnostic trace
 
 ## 🗺️ Roadmap
 
-- [ ] ELF-aware register/memory views
-- [ ] Semihosting / RTT console
-- [ ] English UI localization (current UI labels are Chinese)
-- [ ] Package as a single executable (PyInstaller)
+- [ ] Live flash-progress capture into the Flash tab (stdout streaming is already displayed in Log)
+- [ ] 8.3 short-path fallback for non-ANSI-representable firmware paths
+- [ ] Linux/macOS CI builds (WebKitGTK on Linux)
+- [ ] Rust unit tests for the TCL framing & parsers
 
 ## 📄 License
 

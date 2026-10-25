@@ -1,8 +1,8 @@
 [package]
 name = "openocd-gui"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "OpenOCD-GUI — Tauri 2 port"
+description = "OpenOCD-GUI — a Tauri 2 front-end for OpenOCD"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

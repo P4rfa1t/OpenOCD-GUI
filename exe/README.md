@@ -27,7 +27,7 @@
 ## 重新构建
 
 ```bash
-cd ports/tauri2/src-tauri
+cd src-tauri
 cargo build --release
-# 产物: target/release/openocd-gui.exe
+# 产物: target/release/openocd-gui.exe（mingw 构建时同目录还会有 WebView2Loader.dll，一起取走）
 ```
