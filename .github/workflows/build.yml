@@ -71,7 +71,7 @@ jobs:
         continue-on-error: true
         run: |
           cargo install tauri-cli --version "^2" --locked
-          cd src-tauri && cargo tauri build --no-bundle-verify 2>/dev/null || cargo tauri build
+          cd src-tauri && cargo tauri build
       - uses: actions/upload-artifact@v4
         continue-on-error: true
         with:
