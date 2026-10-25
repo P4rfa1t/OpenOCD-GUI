@@ -201,10 +201,15 @@ function setServerState(state) {
 }
 async function startServer() {
   formToSettings();
+  invoke("log_msg", { msg: "startServer: begin" });
   try {
     await invoke("save_settings", { settings });
     await invoke("start_server", { settings });
-  } catch (e) { notify(String(e), true); }
+    invoke("log_msg", { msg: "startServer: ok" });
+  } catch (e) {
+    invoke("log_msg", { msg: "startServer err: " + e });
+    notify(String(e), true);
+  }
 }
 async function stopServer() { try { await invoke("stop_server"); } catch (e) { notify(String(e), true); } }
 
@@ -611,6 +616,14 @@ async function boot() {
   };
 
   consoleHistory = [];
+
+  // test hook: OPENOCD_GUI_AUTOSTART=1 makes the backend press Start for us
+  invoke("log_msg", { msg: "boot: end of bindings" });
+  if (await invoke("is_autostart")) {
+    invoke("log_msg", { msg: "autostart triggered" });
+    await new Promise(r => setTimeout(r, 500));
+    await startServer();
+  }
 }
 
 function refreshBanksStub() {}

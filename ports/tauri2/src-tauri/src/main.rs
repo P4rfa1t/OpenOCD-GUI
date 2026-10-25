@@ -307,6 +307,28 @@ fn poll_loop(app: &AppHandle, state: &AppState, settings: &Settings) {
 }
 
 // ---------------------------------------------------------------- commands
+fn dbglog(msg: &str) {
+    if let Ok(mut path) = std::env::var("TEMP") {
+        path.push_str("\\ocd_gui_tauri.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            use std::io::Write;
+            let _ = writeln!(f, "{}", msg);
+        }
+    }
+}
+
+#[tauri::command]
+fn log_msg(msg: String) {
+    dbglog(&format!("[js] {}", msg));
+}
+
+#[tauri::command]
+fn is_autostart() -> bool {
+    let on = std::env::var("OPENOCD_GUI_AUTOSTART").is_ok();
+    dbglog(&format!("is_autostart called -> {}", on));
+    on
+}
+
 #[tauri::command]
 fn get_settings(state: State<'_, AppState>) -> Settings {
     state.settings.lock().unwrap().clone()
@@ -330,11 +352,14 @@ fn load_settings_or_default() -> Settings {
 
 #[tauri::command]
 fn start_server(app: AppHandle, state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
+    dbglog("start_server invoked");
     if state.server_running.load(Ordering::SeqCst) {
         return Err("OpenOCD 已在运行".into());
     }
     let args = build_command(&settings)?;
+    dbglog(&format!("argv: {:?}", args));
     let mut child = spawn_openocd(&args)?;
+    dbglog("spawn ok");
     let _ = app.emit("server-state", "starting");
 
     // log reader thread (stdout + stderr merged)
@@ -669,6 +694,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_settings,
+            is_autostart,
+            log_msg,
             save_settings,
             start_server,
             stop_server,
