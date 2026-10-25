@@ -11,3 +11,4 @@ dist/
 ports/tauri2/src-tauri/target/
 ports/tauri2/src-tauri/gen/
 exe/*.exe
+exe/*.dll
