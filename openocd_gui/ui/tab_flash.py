@@ -4,7 +4,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk, filedialog
 
-from openocd_gui.core import parsers
+from openocd_gui.core import parsers, tcl
 from openocd_gui.ui.widgets import mono_font
 
 FILETYPES = [
@@ -121,6 +121,15 @@ class FlashTab(ttk.Frame):
         self.out.insert("1.0", text)
         self.out.configure(state="disabled")
 
+    def _captured_output(self, result, fallback):
+        """Join captured log lines with the RPC reply (UI thread, after a
+        short settle so trailing stdout lines reach the pump first)."""
+        lines = self.app.end_log_capture()
+        text = "\n".join(lines)
+        if result:
+            text = (text + "\n" if text else "") + result
+        return text or fallback
+
     # ------------------------------------------------------------------ program
     def _browse_file(self):
         path = filedialog.askopenfilename(title="选择固件镜像", filetypes=FILETYPES)
@@ -134,38 +143,55 @@ class FlashTab(ttk.Frame):
         if not path:
             self.app.notify("请先选择固件镜像文件", error=True)
             return
-        parts = ["program {%s}" % path.replace("\\", "/")]
+        # OpenOCD's Jim Tcl opens files with the ANSI codepage on Windows, so
+        # non-ASCII paths must be encoded accordingly (or shortened to 8.3).
+        try:
+            path_bytes = tcl.path_to_rpc_bytes(path)
+        except UnicodeEncodeError as exc:
+            self.app.notify(
+                "固件路径无法发送给 OpenOCD（%s）。请把文件移到纯英文路径后重试。" % exc,
+                error=True)
+            return
+        parts = [b"program {" + path_bytes + b"}"]
         offset = self.offset_var.get().strip()
         if offset:
-            parts.append(offset)
+            try:
+                parts.append(offset.encode("ascii"))
+            except UnicodeEncodeError:
+                self.app.notify("偏移地址包含非法字符: %s" % offset, error=True)
+                return
         if self.preverify_var.get():
-            parts.append("preverify")
+            parts.append(b"preverify")
         if self.verify_var.get():
-            parts.append("verify")
+            parts.append(b"verify")
         if self.reset_var.get():
-            parts.append("reset")
-        cmd = " ".join(parts)
+            parts.append(b"reset")
+        cmd = b" ".join(parts)
 
         self._busy = True
         self.program_btn.config(state="disabled", text="烧写中…")
-        self.prog_status_var.set("执行中，进度详见『日志』标签页")
+        self.prog_status_var.set("执行中，日志输出在下方")
+        self._write_out("")
+        self.app.begin_log_capture()
 
-        def on_ok(result):
-            def apply():
+        def finish(result, ok):
+            def settle():
+                text = self._captured_output(
+                    result, "(命令已执行，无日志输出)")
                 self._busy = False
                 self.program_btn.config(state="normal", text="⬇  烧写固件")
-                self.prog_status_var.set("完成")
-                self.app.notify("烧写命令执行完成" + (": %s" % result if result else ""))
-                self._write_out(result or "(命令已执行，详情见日志)")
+                self.prog_status_var.set("完成" if ok else "失败")
+                self._write_out(text)
                 self.app.session.refresh_now()
-            self.app.post(apply)
+            self.after(300, settle)  # let trailing log lines reach the pump
+
+        def on_ok(result):
+            self.app.post(lambda: finish(result, True))
 
         def on_err(exc):
             def apply():
-                self._busy = False
-                self.program_btn.config(state="normal", text="⬇  烧写固件")
-                self.prog_status_var.set("失败")
                 self.app.notify("烧写失败: %s" % exc, error=True)
+                finish(str(exc), False)
             self.app.post(apply)
 
         self.app.session.call_async(cmd, on_ok=on_ok, on_err=on_err, timeout=300.0)
@@ -208,15 +234,22 @@ class FlashTab(ttk.Frame):
         if not self.app.session.tcl.connected:
             return
         cmd = "flash erase_sector %s %s %s" % (bank, first, last)
+        self.app.begin_log_capture()
 
         def on_ok(text):
             def apply():
-                self._write_out(text or "擦除命令已执行")
-                self.app.notify("扇区擦除完成")
-                self._bank_info()
+                def settle():
+                    self._write_out(self._captured_output(
+                        text, "擦除命令已执行"))
+                    self.app.notify("扇区擦除完成")
+                    self._bank_info()
+                self.after(300, settle)
             self.app.post(apply)
 
         def on_err(exc):
-            self.app.post(lambda: self.app.notify("擦除失败: %s" % exc, error=True))
+            def apply():
+                self._captured_output("", "")  # stop the capture
+                self.app.notify("擦除失败: %s" % exc, error=True)
+            self.app.post(apply)
 
         self.app.session.call_async(cmd, on_ok=on_ok, on_err=on_err, timeout=120.0)
