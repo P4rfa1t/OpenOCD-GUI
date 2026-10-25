@@ -3,6 +3,7 @@
 import queue
 import sys
 import threading
+import time
 import webbrowser
 
 import tkinter as tk
@@ -302,6 +303,9 @@ class App:
         else:
             self.update_ports_status()
             self.set_status_message("正在启动 OpenOCD…")
+            self.log_view.append_line(
+                "════════════════ %s ▶ 启动 OpenOCD ════════════════"
+                % time.strftime("%Y-%m-%d %H:%M:%S"))
 
     def stop_server(self):
         self.btn_stop.config(state="disabled")
