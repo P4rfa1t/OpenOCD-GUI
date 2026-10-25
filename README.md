@@ -22,12 +22,18 @@ A cross-platform GUI front-end for [OpenOCD](https://openocd.org) (verified agai
 
 ## 🚀 Getting Started
 
-### Prerequisites
+### Option 1 — Windows executable (recommended)
+
+Download **[OpenOCD-GUI.exe](https://github.com/P4rfa1t/OpenOCD-GUI/releases/latest)** from the releases page — a single file, no Python installation needed, and **no console window ever** (GUI subsystem, independent of any `.pyw` file association). Note: some antivirus products may warn about unsigned PyInstaller binaries; the source build below is the alternative.
+
+### Option 2 — Run from source
+
+#### Prerequisites
 
 - **OpenOCD ≥ 0.12** on your system (the GUI uses the hierarchical `gdb port` / `tcl port` / `telnet port` syntax introduced in 0.12)
 - **Python 3.8+** with Tkinter (bundled with python.org installers; on Debian/Ubuntu: `apt install python3-tk`)
 
-### Run
+#### Run
 
 ```bash
 git clone https://github.com/P4rfa1t/OpenOCD-GUI.git

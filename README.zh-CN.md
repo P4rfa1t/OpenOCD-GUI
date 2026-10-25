@@ -22,12 +22,18 @@
 
 ## 🚀 快速开始
 
-### 前置条件
+### 方式一 — Windows 可执行文件（推荐）
+
+从 [Releases](https://github.com/P4rfa1t/OpenOCD-GUI/releases/latest) 页面下载 **OpenOCD-GUI.exe** —— 单文件、无需安装 Python、**绝不出现控制台窗口**（GUI 子系统程序，与 `.pyw` 文件关联无关）。注意：部分杀毒软件可能对未签名的 PyInstaller 程序误报，可改用下方源码方式运行。
+
+### 方式二 — 源码运行
+
+#### 前置条件
 
 - 系统中安装 **OpenOCD ≥ 0.12**（GUI 使用 0.12 引入的 `gdb port` / `tcl port` / `telnet port` 层级命令语法）
 - **Python 3.8+** 且带 Tkinter（python.org 安装包自带；Debian/Ubuntu 需 `apt install python3-tk`）
 
-### 运行
+#### 运行
 
 ```bash
 git clone https://github.com/P4rfa1t/OpenOCD-GUI.git
