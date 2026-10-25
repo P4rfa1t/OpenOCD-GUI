@@ -15,6 +15,11 @@
 - 前三个是同一应用的三个框架实现，**共享同一份配置** `~/.openocd_gui/settings.json`，可直接双击对拍体验
 - PySide6/PyQt6 版为 PyInstaller onefile，首次启动需解压（约 3-4 秒）；Tauri/Wails 版即点即开
 - Tauri 版带测试钩子：设置环境变量 `OPENOCD_GUI_AUTOSTART=1` 启动会自动点击"启动"按钮（调试用）
+- ⚠ 请用**双击 / 资源管理器 / cmd / PowerShell** 启动：Tauri 版在 MSYS2/Git-Bash 环境下直接启动会报
+  api-ms-win-*.dll 加载错误（msys 加载器怪癖，Windows 正常启动方式不受影响）
+- ⚠ Wails 版若双击闪退：删除 `%TEMP%\Wails2-Benchmark-Demo` 目录后重试——强杀过的 WebView2
+  进程会在该用户数据目录留下坏锁，导致后续同名进程启动即退（设置环境变量
+  `WEBVIEW2_USER_DATA_FOLDER` 指向新目录亦可绕过）
 - 主版本（Tkinter）的 exe 在 [GitHub Release v0.1.0](https://github.com/P4rfa1t/OpenOCD-GUI/releases/tag/v0.1.0)
 
 ## 为何不入 git
