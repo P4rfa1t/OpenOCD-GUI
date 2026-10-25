@@ -12,7 +12,7 @@ A cross-platform GUI front-end for [OpenOCD](https://openocd.org) (verified agai
 
 | Module | Description |
 |---|---|
-| ⚙️ **Config** | Auto-detect the `openocd` executable & scripts dir, picker for `interface / target / board` scripts, ordered config list (`-f`), extra commands (`-c`), ports, debug level, connection presets (shared `~/.openocd_gui` layout) |
+| ⚙️ **Config** | Auto-detect the `openocd` executable & scripts dir, two independent single-select cfg slots — interface (`-f interface/*.cfg`) then target/board (`-f target/*.cfg` or `board/*.cfg`) — so load order can never be wrong; extra commands (`-c`), ports, debug level, connection presets (shared `~/.openocd_gui` layout) |
 | 📜 **Log** | Live colored OpenOCD output with level filtering, autoscroll |
 | 💻 **Console** | Interactive command console over the TCL RPC port, history, quick commands |
 | 🎯 **Target** | Target table with auto-polling, halt / resume / soft reset / reset (halt·run·init), switch current target |
@@ -24,12 +24,16 @@ A cross-platform GUI front-end for [OpenOCD](https://openocd.org) (verified agai
 
 ## 🚀 Getting Started
 
-### Option 1 — Download the Windows executable
+### Option 1 — Download a prebuilt binary
 
-Grab **`OpenOCD-GUI.exe`** + **`WebView2Loader.dll`** from the [releases](https://github.com/P4rfa1t/OpenOCD-GUI/releases/latest) page and keep **both files in the same folder**.
+**Windows** — a single self-contained **`OpenOCD-GUI.exe`**, no DLLs beside it. Grab it from the [releases](https://github.com/P4rfa1t/OpenOCD-GUI/releases/latest) page.
 
 - WebView2 Runtime is required — preinstalled on Windows 10/11 (older systems: [Evergreen installer](https://developer.microsoft.com/microsoft-edge/webview2/))
-- The separate `WebView2Loader.dll` is only needed because the shipped build uses the **mingw** toolchain (dynamically linked loader); an MSVC-built exe embeds it statically — see build notes below
+- The release is built with the **MSVC** toolchain, which links `WebView2Loader` statically into the exe. Older 0.2.0 builds used mingw and needed a separate `WebView2Loader.dll` — those are superseded.
+
+**Linux** — build from source (below) or take the CI artifact `OpenOCD-GUI-linux-x86_64`. Requirements: OpenOCD ≥ 0.12, GTK 3 + WebKitGTK 4.1 runtime (`libwebkit2gtk-4.1-0`, `libgtk-3-0`), and an X11/Wayland session.
+
+**macOS** — CI artifact `OpenOCD-GUI-macos-aarch64`; WebKit is part of the OS.
 
 ### Option 2 — Build from source
 
@@ -41,14 +45,31 @@ cd OpenOCD-GUI/src-tauri
 cargo build --release
 ```
 
-Toolchain notes:
+**Windows** — use the **MSVC** toolchain (`rustup default stable-x86_64-pc-windows-msvc`). It produces one self-contained exe with `WebView2Loader` linked statically, so there is nothing to ship beside it:
 
-- **MSVC** (default on Windows): produces a single self-contained exe
-- **GNU/mingw** (`x86_64-pc-windows-gnu`): the build links `WebView2Loader.dll` dynamically — cargo drops the DLL next to the exe in `target/release/`; ship both files together. If your linker isn't in PATH, add `src-tauri/.cargo/config.toml` (gitignored, machine-specific):
-  ```toml
-  [target.x86_64-pc-windows-gnu]
-  linker = "C:/msys64/ucrt64/bin/gcc.exe"
-  ```
+```bash
+cargo build --release --target x86_64-pc-windows-msvc
+# → target/x86_64-pc-windows-msvc/release/openocd-gui.exe  (single file)
+```
+
+If you must build with **GNU/mingw** (`x86_64-pc-windows-gnu`), the loader is linked dynamically and `WebView2Loader.dll` must sit next to the exe. When the linker isn't in PATH, add `src-tauri/.cargo/config.toml` (gitignored, machine-specific):
+
+```toml
+[target.x86_64-pc-windows-gnu]
+linker = "C:/msys64/ucrt64/bin/gcc.exe"
+```
+
+**Linux** — install the WebKitGTK dev packages first:
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev pkg-config
+# Fedora: sudo dnf install webkit2gtk4.1-devel gtk3-devel librsvg2-devel
+# Arch:   sudo pacman -S webkit2gtk-4.1 gtk3 librsvg
+cargo build --release
+# → target/release/openocd-gui
+```
+
+**macOS** — `cargo build --release` works out of the box (WebKit ships with the OS). Launching external GDB opens Terminal via `osascript`.
 
 ### Daily workflow
 
@@ -85,7 +106,7 @@ The GUI talks to OpenOCD through exactly two channels: the **stdout** of the spa
 
 - [ ] Live flash-progress capture into the Flash tab (stdout streaming is already displayed in Log)
 - [ ] 8.3 short-path fallback for non-ANSI-representable firmware paths
-- [ ] Linux/macOS CI builds (WebKitGTK on Linux)
+- [x] Linux/macOS CI builds (WebKitGTK on Linux)
 - [ ] Rust unit tests for the TCL framing & parsers
 
 ## 📄 License

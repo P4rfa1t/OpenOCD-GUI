@@ -22,6 +22,19 @@
     "frontendDist": "../ui"
   },
   "bundle": {
-    "active": false
+    "active": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "GUI front-end for OpenOCD",
+    "longDescription": "A cross-platform GUI front-end for OpenOCD: config, log, console, target control, registers, memory, flash programming, breakpoints and external GDB launch.",
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
   }
 }

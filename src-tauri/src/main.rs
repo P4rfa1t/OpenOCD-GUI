@@ -1,5 +1,5 @@
 // Prevents an additional console window on Windows in release builds.
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -22,6 +22,10 @@ struct Settings {
     #[serde(default)]
     configs: Vec<String>,
     #[serde(default)]
+    interface_cfg: String,
+    #[serde(default)]
+    target_cfg: String,
+    #[serde(default)]
     extra_commands: Vec<String>,
     debug_level: i32,
     log_file: String,
@@ -38,6 +42,23 @@ struct Settings {
     window_geometry: String,
 }
 
+// Linux 上 GDB 常带版本后缀（gdb-multiarch / arm-none-eabi-gdb）
+fn default_gdb_name() -> String {
+    if cfg!(windows) {
+        return "arm-none-eabi-gdb".into();
+    }
+    for cand in ["arm-none-eabi-gdb", "gdb-multiarch", "gdb"] {
+        if let Ok(paths) = std::env::var("PATH") {
+            for dir in std::env::split_paths(&paths) {
+                if dir.join(cand).is_file() {
+                    return cand.to_string();
+                }
+            }
+        }
+    }
+    "arm-none-eabi-gdb".into()
+}
+
 impl Settings {
     fn with_defaults() -> Self {
         Self {
@@ -45,7 +66,7 @@ impl Settings {
             gdb_port: 3333,
             tcl_port: 6666,
             telnet_port: 4444,
-            gdb_path: "arm-none-eabi-gdb".into(),
+            gdb_path: default_gdb_name(),
             gdb_args: "-ex \"target remote localhost:3333\"".into(),
             auto_poll: true,
             poll_interval_ms: 1000,
@@ -56,9 +77,13 @@ impl Settings {
 }
 
 fn config_dir() -> std::path::PathBuf {
+    // Windows: %USERPROFILE%；Linux/macOS: $XDG_CONFIG_HOME 或 $HOME
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
-        .unwrap_or_default();
+        .unwrap_or_else(|_| ".".to_string());
+    if home.is_empty() {
+        return std::path::PathBuf::from(".openocd_gui");
+    }
     std::path::PathBuf::from(home).join(".openocd_gui")
 }
 
@@ -223,11 +248,15 @@ fn build_command(s: &Settings) -> Result<Vec<String>, String> {
         args.push("-c".into());
         args.push(format!("{} port {}", name, port));
     }
-    for c in &s.configs {
-        if !c.trim().is_empty() {
-            args.push("-f".into());
-            args.push(c.trim().to_string());
-        }
+    // 配置文件：固定先接口、后目标/板级（接口排在目标之后会导致 OpenOCD 启动失败）。
+    // 旧版有序列表 configs 仅保留反序列化兼容，不再参与构建命令。
+    if !s.interface_cfg.trim().is_empty() {
+        args.push("-f".into());
+        args.push(s.interface_cfg.trim().to_string());
+    }
+    if !s.target_cfg.trim().is_empty() {
+        args.push("-f".into());
+        args.push(s.target_cfg.trim().to_string());
     }
     for c in &s.extra_commands {
         if !c.trim().is_empty() {
@@ -457,40 +486,68 @@ fn refresh_targets(state: State<'_, AppState>) -> Result<String, String> {
 }
 
 // ---------------------------------------------------------------- detector
-fn find_openocd_candidates() -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let path_var = std::env::var("PATH").unwrap_or_default();
-    for dir in path_var.split(';').chain(path_var.split(':')) {
-        let dir = dir.trim();
-        if dir.is_empty() {
-            continue;
+fn openocd_bin_names() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["openocd.exe", "openocd"]
+    } else {
+        &["openocd"]
+    }
+}
+
+fn extra_candidates() -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    if cfg!(windows) {
+        for extra in [
+            r"C:\Program Files\openocd\bin\openocd.exe",
+            r"C:\Program Files\OpenOCD\bin\openocd.exe",
+            r"C:\Program Files (x86)\openocd\bin\openocd.exe",
+            r"C:\OpenOCD\bin\openocd.exe",
+            r"C:\msys64\usr\bin\openocd.exe",
+            r"C:\msys64\ucrt64\bin\openocd.exe",
+        ] {
+            v.push(extra.to_string());
         }
-        for name in ["openocd.exe", "openocd"] {
-            let p = std::path::Path::new(dir).join(name);
-            if p.is_file() && !out.contains(&p.to_string_lossy().to_string()) {
-                out.push(p.to_string_lossy().to_string());
+    } else {
+        for extra in [
+            "/usr/bin/openocd",
+            "/usr/local/bin/openocd",
+            "/usr/sbin/openocd",
+            "/opt/homebrew/bin/openocd",
+            "/opt/local/bin/openocd",
+            "/snap/bin/openocd",
+            "/var/lib/flatpak/exports/bin/org.openocd.OpenOCD",
+        ] {
+            v.push(extra.to_string());
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            if !home.is_empty() {
+                v.push(format!("{}/.local/bin/openocd", home));
+                v.push(format!("{}/.cargo/bin/openocd", home));
             }
         }
     }
-    let pf = r"C:\Program Files";
-    for extra in [
-        r"C:\Program Files\openocd\bin\openocd.exe",
-        r"C:\Program Files\OpenOCD\bin\openocd.exe",
-        r"C:\Program Files (x86)\openocd\bin\openocd.exe",
-        r"C:\OpenOCD\bin\openocd.exe",
-        r"C:\msys64\usr\bin\openocd.exe",
-        "/usr/bin/openocd",
-        "/usr/local/bin/openocd",
-    ] {
-        let p = std::path::Path::new(extra);
+    v
+}
+
+fn find_openocd_candidates() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |p: std::path::PathBuf| {
         if p.is_file() {
             let s = p.to_string_lossy().to_string();
             if !out.contains(&s) {
                 out.push(s);
             }
         }
+    };
+    // PATH 用系统分隔符拆分（Windows 为 ';'，Linux/macOS 为 ':'）
+    for dir in std::env::split_paths(&std::env::var("PATH").unwrap_or_default()) {
+        for name in openocd_bin_names() {
+            push(dir.join(name));
+        }
     }
-    let _ = pf;
+    for extra in extra_candidates() {
+        push(std::path::PathBuf::from(extra));
+    }
     out
 }
 
@@ -551,6 +608,11 @@ fn guess_scripts_dir(exe: &str) -> String {
         "../scripts",
         "scripts",
         "../share/scripts",
+        // Linux 发行版 / Flatpak / AppImage 的常见布局
+        "../share/openocd",
+        "../../share/openocd/scripts",
+        "/usr/share/openocd/scripts",
+        "/usr/local/share/openocd/scripts",
     ] {
         let cand = dir.join(rel);
         if cand.join("interface").is_dir() || cand.join("target").is_dir() {
@@ -625,8 +687,89 @@ fn launch_gdb(gdb: String, args: String) -> Result<(), String> {
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0000_0010); // CREATE_NEW_CONSOLE
+        return cmd.spawn().map(|_| ()).map_err(|e| e.to_string());
     }
-    cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+
+    // Linux/macOS 没有 CREATE_NEW_CONSOLE：交给系统终端模拟器承载交互式 GDB
+    #[cfg(target_os = "linux")]
+    {
+        let argv: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        let mut line = shell_quote(&gdb);
+        for a in argv {
+            line.push(' ');
+            line.push_str(&shell_quote(&a));
+        }
+        for term in [
+            "x-terminal-emulator",
+            "gnome-terminal",
+            "konsole",
+            "xfce4-terminal",
+            "kitty",
+            "alacritty",
+            "xterm",
+        ] {
+            let mut t = Command::new(term);
+            if term == "gnome-terminal" {
+                t.arg("--").arg("sh").arg("-c").arg(&line);
+            } else {
+                t.arg("-e").arg("sh").arg("-c").arg(&line);
+            }
+            if t.spawn().is_ok() {
+                return Ok(());
+            }
+        }
+        return Err("未找到可用的终端模拟器（x-terminal-emulator / gnome-terminal / konsole / xterm）".into());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let argv: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        let mut line = shell_quote(&gdb);
+        for a in argv {
+            line.push(' ');
+            line.push_str(&shell_quote(&a));
+        }
+        let script = format!(
+            "tell application \"Terminal\" to do script \"{}\"\ntell application \"Terminal\" to activate",
+            line.replace('\\', "\\\\").replace('"', "\\\"")
+        );
+        if Command::new("osascript").arg("-e").arg(script).spawn().is_ok() {
+            return Ok(());
+        }
+        return Err("无法通过 osascript 打开 Terminal".into());
+    }
+
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    {
+        return cmd.spawn().map(|_| ()).map_err(|e| e.to_string());
+    }
+
+    #[allow(unreachable_code)]
+    Err("当前平台不支持启动外部终端".into())
+}
+
+// POSIX shell 单引号转义
+#[allow(dead_code)]
+fn shell_quote(s: &str) -> String {
+    if s.is_empty() {
+        return "''".into();
+    }
+    let mut out = String::from("'");
+    for c in s.chars() {
+        if c == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
 }
 
 // ---------------------------------------------------------------- profiles

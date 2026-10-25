@@ -12,7 +12,7 @@
 
 | 模块 | 说明 |
 |---|---|
-| ⚙️ **配置** | 自动检测 `openocd` 可执行文件与脚本目录、`interface / target / board` 脚本选择、有序配置列表（`-f`）、附加命令（`-c`）、端口、调试级别、连接预设（共享 `~/.openocd_gui` 布局） |
+| ⚙️ **配置** | 自动检测 `openocd` 可执行文件与脚本目录；两个独立的 cfg 单选框 —— 接口（`-f interface/*.cfg`）在前、目标/板级（`-f target/*.cfg` 或 `board/*.cfg`）在后，加载顺序不会错；附加命令（`-c`）、端口、调试级别、连接预设（共享 `~/.openocd_gui` 布局） |
 | 📜 **日志** | 彩色分级实时输出、过滤、自动滚动 |
 | 💻 **控制台** | 基于 TCL RPC 端口的交互式命令行、历史记录、快捷命令 |
 | 🎯 **目标** | 目标表格自动轮询、halt / resume / 软复位 / reset（halt·run·init）、切换当前目标 |
@@ -24,12 +24,16 @@
 
 ## 🚀 快速开始
 
-### 方式一 — 下载 Windows 可执行文件
+### 方式一 — 下载现成二进制
 
-从 [Releases](https://github.com/P4rfa1t/OpenOCD-GUI/releases/latest) 下载 **`OpenOCD-GUI.exe`** 和 **`WebView2Loader.dll`**，**两个文件放在同一目录**。
+**Windows** — 单个自包含的 **`OpenOCD-GUI.exe`**，旁边不需要任何 DLL。从 [Releases](https://github.com/P4rfa1t/OpenOCD-GUI/releases/latest) 下载。
 
 - 需要 WebView2 Runtime——Windows 10/11 系统自带（老系统装 [Evergreen 运行时](https://developer.microsoft.com/microsoft-edge/webview2/)）
-- 之所以需要单独的 `WebView2Loader.dll`，是因为发布构建使用 **mingw** 工具链（动态链接 loader）；用 MSVC 工具链自行构建可静态嵌入——见下方构建说明
+- 发布版用 **MSVC** 工具链构建，`WebView2Loader` 已静态链接进 exe。早期的 0.2.0 用 mingw 构建、需要外挂 `WebView2Loader.dll`，那些已被取代
+
+**Linux** — 源码构建（见下），或取 CI 产物 `OpenOCD-GUI-linux-x86_64`。需要 OpenOCD ≥ 0.12、GTK 3 + WebKitGTK 4.1 运行时（`libwebkit2gtk-4.1-0`、`libgtk-3-0`），以及 X11/Wayland 会话。
+
+**macOS** — CI 产物 `OpenOCD-GUI-macos-aarch64`；WebKit 由系统提供。
 
 ### 方式二 — 源码构建
 
@@ -41,14 +45,31 @@ cd OpenOCD-GUI/src-tauri
 cargo build --release
 ```
 
-工具链说明：
+**Windows** — 用 **MSVC** 工具链（`rustup default stable-x86_64-pc-windows-msvc`）。产出单文件、自包含的 exe，`WebView2Loader` 已静态链接，不需要外挂任何 DLL：
 
-- **MSVC**（Windows 默认）：产出单文件、自包含的 exe
-- **GNU/mingw**（`x86_64-pc-windows-gnu`）：构建会动态链接 `WebView2Loader.dll`——cargo 会把它放到 `target/release/` 里，分发时与 exe 一起打包。若链接器不在 PATH，添加 `src-tauri/.cargo/config.toml`（已 gitignore，机器相关）：
-  ```toml
-  [target.x86_64-pc-windows-gnu]
-  linker = "C:/msys64/ucrt64/bin/gcc.exe"
-  ```
+```bash
+cargo build --release --target x86_64-pc-windows-msvc
+# → target/x86_64-pc-windows-msvc/release/openocd-gui.exe（单文件）
+```
+
+如果一定要用 **GNU/mingw**（`x86_64-pc-windows-gnu`）构建，loader 是动态链接的，`WebView2Loader.dll` 必须和 exe 放在一起。链接器不在 PATH 时，添加 `src-tauri/.cargo/config.toml`（已 gitignore，机器相关）：
+
+```toml
+[target.x86_64-pc-windows-gnu]
+linker = "C:/msys64/ucrt64/bin/gcc.exe"
+```
+
+**Linux** — 先装 WebKitGTK 开发包：
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev pkg-config
+# Fedora: sudo dnf install webkit2gtk4.1-devel gtk3-devel librsvg2-devel
+# Arch:   sudo pacman -S webkit2gtk-4.1 gtk3 librsvg
+cargo build --release
+# → target/release/openocd-gui
+```
+
+**macOS** — 直接 `cargo build --release` 即可（WebKit 由系统提供）。启动外部 GDB 会通过 `osascript` 打开 Terminal。
 
 ### 日常工作流
 
@@ -85,8 +106,9 @@ GUI 与 OpenOCD 只通过两个通道通信：子进程 **stdout**（→ 日志�
 
 - [ ] 烧写页实时进度捕获（stdout 进度目前显示在日志页）
 - [ ] 非 ANSI 可表示路径的 8.3 短路径回退
-- [ ] Linux/macOS CI 构建（Linux 走 WebKitGTK）
+- [x] Linux/macOS CI 构建（Linux 走 WebKitGTK）
 - [ ] TCL 帧协议与解析器的 Rust 单元测试
+- [ ] Linux 发行版打包（.deb / .AppImage / AUR）
 
 ## 📄 许可证
 

@@ -62,12 +62,15 @@
       <div class="row"><input id="cfg-scripts" style="flex:1"><button class="btn" id="cfg-scripts-browse">浏览…</button>
       <button class="btn" id="cfg-rescan">重新扫描</button><span class="muted" id="cfg-scan-label">未扫描</span></div>
     </fieldset>
-    <fieldset><legend>配置文件（每行一个，按加载顺序）</legend>
-      <textarea id="cfg-configs" rows="3" style="width:100%"></textarea>
-      <div class="row">从脚本库添加:
-        <select id="cfg-category"><option>interface</option><option>target</option><option>board</option></select>
-        <input id="cfg-pick" list="cfg-pick-list" style="width:280px"><datalist id="cfg-pick-list"></datalist>
-        <button class="btn" id="cfg-add">添加 →</button></div>
+    <fieldset><legend>配置文件 (-f：先接口、后目标/板级，各仅一项)</legend>
+      <div class="row">接口 cfg: <select id="cfg-interface" style="flex:1"></select>
+        <button class="btn" id="cfg-interface-browse">浏览…</button>
+        <button class="btn" id="cfg-interface-clear">清除</button></div>
+      <div class="row">目标/板级 cfg: <select id="cfg-target" style="flex:1"></select>
+        <button class="btn" id="cfg-target-browse">浏览…</button>
+        <button class="btn" id="cfg-target-clear">清除</button></div>
+      <p class="muted" id="cfg-order-preview">未选择 cfg</p>
+      <p class="muted">加载顺序固定：接口 → 目标/板级。使用 board/*.cfg 时它通常已包含接口与目标，接口可留空。</p>
     </fieldset>
     <fieldset><legend>附加命令 (-c，每行一条，如 adapter speed 3000)</legend>
       <textarea id="cfg-cmds" rows="3" style="width:100%"></textarea>

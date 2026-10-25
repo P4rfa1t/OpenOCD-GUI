@@ -34,14 +34,28 @@ function parseRegs(text) {
     if (!t) continue;
     if (t.startsWith("Error")) return { err: t, regs: [] };
     if (t.startsWith("=")) { group = t.replace(/^=+/, "").trim(); continue; }
-    const m = t.match(/^\((\d+)\)\s+(\S+)\s+\/(\d+)(?::\s*(\S+))?\s*(\(dirty\))?$/);
-    if (m) regs.push({ num: +m[1], group, name: m[2], size: +m[3],
-                       value: m[4] || "", dirty: !!m[5] });
+    // (N) name (/bits)[: value [(dirty) | dirty]] — 全量 reg 输出
+    let m = t.match(/^\((\d+)\)\s+(\S+)\s+\(\/(\d+)\)(?::\s*(\S+))?\s*(\(dirty\)|dirty)?$/)
+         || t.match(/^\((\d+)\)\s+(\S+)\s+\/(\d+)(?::\s*(\S+))?\s*(\(dirty\)|dirty)?$/);
+    if (m) {
+      regs.push({ num: +m[1], group, name: m[2], size: +m[3],
+                  value: m[4] || "", dirty: !!m[5] });
+      continue;
+    }
+    // name (/bits)[: value [(dirty) | dirty]] — 单寄存器 reg <name> 输出
+    m = t.match(/^(\S+)\s+\(\/(\d+)\)(?::\s*(\S+))?\s*(\(dirty\)|dirty)?$/);
+    if (m) regs.push({ num: regs.length, group, name: m[1], size: +m[2],
+                       value: m[3] || "", dirty: !!m[4] });
   }
-  return { err: regs.length ? "" : text.trim().split("\n")[0], regs };
+  if (!regs.length) {
+    const first = text.split("\n").map(s => s.trim()).find(s => s && !s.startsWith("="));
+    return { err: first || "", regs: [] };
+  }
+  return { err: "", regs };
 }
 function padHex(v, bits) {
   if (!v) return "";
+  if (!/^0x/i.test(v)) return v;
   return "0x" + v.slice(2).toLowerCase().padStart(Math.max(1, bits / 4), "0");
 }
 function parseMd(text) {
@@ -136,6 +150,8 @@ function selectTab(id) {
     el.classList.toggle("active", el.dataset.page === id));
   document.querySelectorAll(".page").forEach(p =>
     p.classList.toggle("active", p.id === "page-" + id));
+  if (id === "regs" && $("tcl-label").textContent.includes("已连接") &&
+      !regRows.length && !regPending) refreshRegs();
 }
 function setConnTabs(enabled) {
   document.querySelectorAll("#tabs div").forEach(el => {
@@ -147,13 +163,22 @@ function setConnTabs(enabled) {
       if (id === "bp") refreshBp();
     }
   });
+  // 连接建立时若正停在寄存器页，立刻读一次，避免空白等自动刷新
+  if (enabled && document.getElementById("page-regs")?.classList.contains("active")) {
+    regRows = [];
+    refreshRegs();
+  }
 }
 
 // ---------------------------------------------------------------- settings <-> form
 function formToSettings() {
   settings.openocd_path = $("cfg-exe").value.trim();
   settings.scripts_dir = $("cfg-scripts").value.trim();
-  settings.configs = $("cfg-configs").value.split("\n").map(s => s.trim()).filter(s => s);
+  const ifcSel = $("cfg-interface"), tgtSel = $("cfg-target");
+  // 脚本库尚未扫描出来时下拉是空的，此时沿用已保存值，避免把配置清空
+  const keepOld = !cfgSelectsReady;
+  settings.interface_cfg = ifcSel.value.trim() || (keepOld ? (settings.interface_cfg || "") : "");
+  settings.target_cfg = tgtSel.value.trim() || (keepOld ? (settings.target_cfg || "") : "");
   settings.extra_commands = $("cfg-cmds").value.split("\n").map(s => s.trim()).filter(s => s);
   for (const [k, id] of [["gdb_port", "cfg-gdb"], ["tcl_port", "cfg-tcl"], ["telnet_port", "cfg-telnet"]]) {
     const v = parseInt($(id).value);
@@ -168,9 +193,11 @@ function formToSettings() {
   settings.auto_poll = $("tg-auto").checked;
 }
 function settingsToForm() {
+  migrateLegacyConfigs();
   $("cfg-exe").value = settings.openocd_path || "";
   $("cfg-scripts").value = settings.scripts_dir || "";
-  $("cfg-configs").value = (settings.configs || []).join("\n");
+  // 选项可能尚未扫描出来，syncCfgSelectValues 会在缺少对应 option 时补一个
+  syncCfgSelectValues(true);
   $("cfg-cmds").value = (settings.extra_commands || []).join("\n");
   $("cfg-gdb").value = settings.gdb_port; $("cfg-tcl").value = settings.tcl_port;
   $("cfg-telnet").value = settings.telnet_port;
@@ -182,6 +209,7 @@ function settingsToForm() {
   $("tg-interval").value = settings.poll_interval_ms || 1000;
   $("tg-auto").checked = settings.auto_poll !== false;
   updateGdbPreview();
+  updateCfgPreview();
 }
 function updateGdbPreview() {
   $("gdb-preview").textContent = `${$("gdb-path").value} ${$("gdb-args").value}`;
@@ -305,7 +333,13 @@ async function refreshRegs() {
     const text = await tclExec("reg", 20000);
     const { regs, err } = parseRegs(text);
     regRows = regs;
-    $("reg-status").textContent = err || `${regs.length} 个寄存器`;
+    if (regs.length) {
+      $("reg-status").textContent = `${regs.length} 个寄存器`;
+    } else {
+      // 解析不出任何寄存器时把原始输出打到日志页，便于定位格式差异
+      $("reg-status").textContent = err || "未解析到寄存器";
+      appendLog("$ reg\n" + text);
+    }
     renderRegs();
   } catch (e) { $("reg-status").textContent = "读取失败: " + e; }
   regPending = false;
@@ -471,7 +505,7 @@ async function boot() {
   $("btn-start").onclick = startServer;
   $("btn-stop").onclick = stopServer;
   $("cfg-exe-browse").onclick = async () => {
-    const f = await dialogOpen({ multiple: false });
+    const f = await dialogOpen({ multiple: false, filters: EXE_FILTERS });
     if (f) $("cfg-exe").value = f;
   };
   $("cfg-scripts-browse").onclick = async () => {
@@ -488,10 +522,24 @@ async function boot() {
   };
   $("cfg-version").onclick = queryVersion;
   $("cfg-rescan").onclick = rescanScripts;
-  $("cfg-category").onchange = rescanScripts;
-  $("cfg-add").onclick = () => {
-    const v = $("cfg-pick").value.trim();
-    if (v) $("cfg-configs").value = ($("cfg-configs").value.trim() + "\n" + v).trim();
+  $("cfg-interface").onchange = $("cfg-target").onchange = updateCfgPreview;
+  $("cfg-interface-browse").onclick = async () => {
+    const f = await dialogOpen({ multiple: false, filters: CFG_FILTERS });
+    if (!f) return;
+    settings.interface_cfg = f;
+    syncCfgSelectValues();
+  };
+  $("cfg-target-browse").onclick = async () => {
+    const f = await dialogOpen({ multiple: false, filters: CFG_FILTERS });
+    if (!f) return;
+    settings.target_cfg = f;
+    syncCfgSelectValues();
+  };
+  $("cfg-interface-clear").onclick = () => {
+    settings.interface_cfg = ""; $("cfg-interface").value = ""; updateCfgPreview();
+  };
+  $("cfg-target-clear").onclick = () => {
+    settings.target_cfg = ""; $("cfg-target").value = ""; updateCfgPreview();
   };
   $("profile-save").onclick = async () => {
     formToSettings();
@@ -563,7 +611,7 @@ async function boot() {
 
   // flash
   $("fl-browse").onclick = async () => {
-    const f = await dialogOpen({ multiple: false });
+    const f = await dialogOpen({ multiple: false, filters: FIRMWARE_FILTERS });
     if (f) $("fl-file").value = f;
   };
   $("fl-program").onclick = programFirmware;
@@ -634,14 +682,88 @@ async function queryVersion() {
   const v = await invoke("query_version", { exe });
   $("cfg-version-label").textContent = "版本: " + (v || "无法获取");
 }
+// ---------------------------------------------------------------- cfg 选择与文件过滤器
+const FIRMWARE_FILTERS = [
+  { name: "固件镜像 (*.bin;*.hex;*.elf;*.axf;*.out;*.mot;*.s19;*.icf)",
+    extensions: ["bin", "hex", "elf", "axf", "out", "mot", "s19", "icf"] },
+  { name: "ELF (*.elf;*.axf;*.out)", extensions: ["elf", "axf", "out"] },
+  { name: "Intel HEX / Motorola S-Record (*.hex;*.mot;*.s19)", extensions: ["hex", "mot", "s19"] },
+  { name: "二进制 (*.bin)", extensions: ["bin"] },
+  { name: "所有文件 (*.*)", extensions: ["*"] },
+];
+const CFG_FILTERS = [
+  { name: "OpenOCD 脚本 (*.cfg)", extensions: ["cfg"] },
+  { name: "所有文件 (*.*)", extensions: ["*"] },
+];
+const EXE_FILTERS = [
+  { name: "可执行文件 (*.exe)", extensions: ["exe"] },
+  { name: "所有文件 (*.*)", extensions: ["*"] },
+];
+let scriptLists = { interface: [], target: [], board: [] };
+let cfgSelectsReady = false;  // fillCfgSelects 是否已跑过（脚本库扫描完成）
+
+// 旧版“每行一个、按加载顺序”的有序列表 → 接口/目标两个单选字段（一次性迁移）
+function migrateLegacyConfigs() {
+  settings.interface_cfg = settings.interface_cfg || "";
+  settings.target_cfg = settings.target_cfg || "";
+  if (settings.interface_cfg.trim() || settings.target_cfg.trim()) {
+    settings.configs = []; return;
+  }
+  const old = settings.configs || [];
+  if (!old.length) return;
+  const isIfc = (c) => /(^|[\/\\])interface\//i.test(c) ||
+    (!/^(target|board)[\/\\]/i.test(c) &&
+     /cmsis|stlink|jlink|ftdi|dap|ft2232|ulink|vsllink|usb_blaster|bitbang|parport|sysfsgpio/i.test(c));
+  const ifc = old.find(isIfc) || "";
+  const rest = old.filter(c => c !== ifc);
+  settings.interface_cfg = ifc;
+  settings.target_cfg = rest[0] || "";
+  settings.configs = [];
+}
+
+function updateCfgPreview() {
+  const parts = [];
+  const i = $("cfg-interface").value.trim(), t = $("cfg-target").value.trim();
+  if (i) parts.push("-f " + i);
+  if (t) parts.push("-f " + t);
+  $("cfg-order-preview").textContent =
+    parts.length ? "启动顺序: openocd … " + parts.join(" ") : "未选择 cfg（两者均可留空）";
+}
+
+// 把 settings 里的 cfg 路径反映到下拉框；preferSettings=true 时以 settings 为准
+// （载入设置/切换预设时用），否则保留用户当前选中的项。
+function syncCfgSelectValues(preferSettings) {
+  if (!settings) return;
+  for (const [selId, key] of [["cfg-interface", "interface_cfg"], ["cfg-target", "target_cfg"]]) {
+    const sel = $(selId);
+    if (!sel) continue;
+    const fromSettings = (settings[key] || "").trim();
+    const cur = preferSettings ? fromSettings : ((sel.value || "").trim() || fromSettings);
+    if (cur && ![...sel.options].some(o => o.value === cur)) sel.add(new Option(cur, cur));
+    sel.value = cur;
+  }
+  updateCfgPreview();
+}
+
+function fillCfgSelects() {
+  const opts = (arr) => (arr || []).map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join("");
+  $("cfg-interface").innerHTML = `<option value="">（不使用）</option>` + opts(scriptLists.interface);
+  $("cfg-target").innerHTML = `<option value="">（不使用）</option>` +
+    `<optgroup label="target">${opts(scriptLists.target)}</optgroup>` +
+    `<optgroup label="board">${opts(scriptLists.board)}</optgroup>`;
+  cfgSelectsReady = true;
+  syncCfgSelectValues();
+}
+
 async function rescanScripts() {
   const dir = $("cfg-scripts").value.trim();
   if (!dir) { $("cfg-scan-label").textContent = "未扫描"; return; }
-  const r = await invoke("scan_scripts", { dir });
+  try {
+    scriptLists = await invoke("scan_scripts", { dir });
+  } catch (e) { $("cfg-scan-label").textContent = "扫描失败: " + e; return; }
   $("cfg-scan-label").textContent =
-    `interface ${r.interface.length} · target ${r.target.length} · board ${r.board.length}`;
-  $("cfg-pick-list").innerHTML = (r[$("cfg-category").value] || [])
-    .map(s => `<option value="${esc(s)}">`).join("");
+    `interface ${(scriptLists.interface || []).length} · target ${(scriptLists.target || []).length} · board ${(scriptLists.board || []).length}`;
+  fillCfgSelects();
 }
 async function reloadProfiles() {
   const list = await invoke("list_profiles");
