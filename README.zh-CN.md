@@ -94,6 +94,10 @@ python -m unittest discover -s tests   # 解析器与命令构建器测试
 python run.py --smoke                  # 无头 UI 构建自检
 ```
 
+### 框架评估：PySide6 与 Tauri 2 移植版
+
+同一应用还分别移植到了 [PySide6](ports/pyside6/)（复用 `openocd_gui/core/`）与 [Tauri 2](ports/tauri2/)（Rust + 原生 JS 重写），三框架的体积/内存/代码量实测对比见 [ports/COMPARISON.md](ports/COMPARISON.md)。仓库根目录的 Tkinter 版本仍是主前端。
+
 ## 🗺️ 计划
 
 - [ ] ELF 感知的寄存器/内存视图

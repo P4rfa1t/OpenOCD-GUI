@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>OpenOCD-GUI (Tauri 2)</title>
+<style>
+  :root { --bg:#f5f6f8; --panel:#fff; --line:#e2e5ea; --text:#1a1a1a; --muted:#6b7280;
+          --blue:#2563eb; --green:#059669; --red:#dc2626; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:13px "Segoe UI","Microsoft YaHei",sans-serif; color:var(--text); background:var(--bg); }
+  .toolbar { display:flex; align-items:center; gap:10px; padding:8px 12px; background:#fff; border-bottom:1px solid var(--line); }
+  .toolbar button { padding:6px 18px; border:none; border-radius:4px; color:#fff; cursor:pointer; font-weight:bold; }
+  #btn-start { background:var(--green); } #btn-stop { background:var(--red); }
+  #btn-start:disabled, #btn-stop:disabled { opacity:.45; cursor:default; }
+  .dot { width:12px; height:12px; border-radius:50%; background:#9ca3af; display:inline-block; margin-right:4px; }
+  .muted { color:var(--muted); }
+  .tabs { display:flex; background:#fff; border-bottom:1px solid var(--line); padding:0 8px; }
+  .tabs div { padding:8px 14px; cursor:pointer; border-bottom:2px solid transparent; color:var(--muted); }
+  .tabs div.active { color:var(--blue); border-bottom-color:var(--blue); font-weight:bold; }
+  .tabs div.disabled { color:#c3c7cf; pointer-events:none; }
+  .page { display:none; padding:12px; height:calc(100vh - 84px); overflow:auto; }
+  .page.active { display:block; }
+  fieldset { border:1px solid var(--line); border-radius:6px; margin-bottom:10px; background:var(--panel); }
+  legend { padding:0 6px; color:var(--muted); }
+  input, select, textarea { font:12px Consolas,monospace; padding:4px 6px; border:1px solid var(--line); border-radius:4px; }
+  button.btn { padding:4px 12px; border:1px solid var(--line); border-radius:4px; background:#fff; cursor:pointer; }
+  button.btn:hover { background:#eef1f5; }
+  table { border-collapse:collapse; width:100%; background:#fff; }
+  th, td { border:1px solid var(--line); padding:3px 8px; font:12px Consolas,monospace; text-align:left; white-space:nowrap; }
+  th { background:#f0f2f5; position:sticky; top:0; }
+  .row { display:flex; gap:8px; align-items:center; margin:6px 0; flex-wrap:wrap; }
+  #log-view, #console-view, #flash-out { font:12px Consolas,monospace; background:#111827; color:#e5e7eb;
+    padding:8px; border-radius:6px; height:calc(100vh - 190px); overflow:auto; white-space:pre; }
+  #console-view { height:calc(100vh - 250px); }
+  .err { color:#f87171; } .warn { color:#fbbf24; } .inf { color:#93c5fd; } .dbg { color:#8e8e8e; }
+  .prompt { color:#34d399; font-weight:bold; }
+  label.chk { display:flex; align-items:center; gap:4px; }
+  .table-wrap { overflow:auto; max-height:300px; border:1px solid var(--line); border-radius:4px; }
+  #statusbar { position:fixed; bottom:0; left:0; right:0; display:flex; gap:20px; padding:3px 12px;
+    background:#e5e7eb; font-size:12px; color:#4b5563; }
+  #status-msg { margin-left:auto; color:var(--blue); }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <button id="btn-start">▶  启动</button>
+    <button id="btn-stop" disabled>■  停止</button>
+    <span><span class="dot" id="state-dot"></span><b id="state-label">已停止</b></span>
+    <span class="muted" id="tcl-label">TCL: 未连接</span>
+    <span class="muted" id="target-label">目标: —</span>
+  </div>
+  <div class="tabs" id="tabs"></div>
+
+  <!-- 配置 -->
+  <div class="page" id="page-config">
+    <fieldset><legend>OpenOCD 程序</legend>
+      <div class="row"><input id="cfg-exe" style="flex:1"><button class="btn" id="cfg-exe-browse">浏览…</button>
+      <button class="btn" id="cfg-autodetect">自动检测</button><button class="btn" id="cfg-version">检测版本</button>
+      <span class="muted" id="cfg-version-label">版本: 未知</span></div>
+    </fieldset>
+    <fieldset><legend>脚本目录 (-s)</legend>
+      <div class="row"><input id="cfg-scripts" style="flex:1"><button class="btn" id="cfg-scripts-browse">浏览…</button>
+      <button class="btn" id="cfg-rescan">重新扫描</button><span class="muted" id="cfg-scan-label">未扫描</span></div>
+    </fieldset>
+    <fieldset><legend>配置文件（每行一个，按加载顺序）</legend>
+      <textarea id="cfg-configs" rows="3" style="width:100%"></textarea>
+      <div class="row">从脚本库添加:
+        <select id="cfg-category"><option>interface</option><option>target</option><option>board</option></select>
+        <input id="cfg-pick" list="cfg-pick-list" style="width:280px"><datalist id="cfg-pick-list"></datalist>
+        <button class="btn" id="cfg-add">添加 →</button></div>
+    </fieldset>
+    <fieldset><legend>附加命令 (-c，每行一条，如 adapter speed 3000)</legend>
+      <textarea id="cfg-cmds" rows="3" style="width:100%"></textarea>
+    </fieldset>
+    <fieldset><legend>服务端口与调试</legend>
+      <div class="row">GDB <input id="cfg-gdb" style="width:70px"> TCL <input id="cfg-tcl" style="width:70px">
+        Telnet <input id="cfg-telnet" style="width:70px"> 监听 <input id="cfg-bind" style="width:110px">
+        调试级别 <select id="cfg-debug"><option>0（默认）</option><option>1（最少）</option><option>2（警告）</option><option>3（信息）</option><option>4（调试）</option></select>
+        日志文件 <input id="cfg-logfile" style="flex:1"></div>
+    </fieldset>
+    <fieldset><legend>配置预设</legend>
+      <div class="row"><select id="profile-select" style="flex:1"></select>
+        <button class="btn" id="profile-save">保存为预设</button>
+        <button class="btn" id="profile-load">加载</button>
+        <button class="btn" id="profile-delete">删除</button></div>
+    </fieldset>
+  </div>
+
+  <!-- 日志 -->
+  <div class="page" id="page-log">
+    <div class="row">过滤: <select id="log-filter"><option>全部</option><option>信息及以上</option><option>警告+错误</option><option>仅错误</option></select>
+      <label class="chk"><input type="checkbox" id="log-autoscroll" checked>自动滚动</label>
+      <button class="btn" id="log-copy">复制全部</button><button class="btn" id="log-clear">清空</button></div>
+    <div id="log-view"></div>
+  </div>
+
+  <!-- 控制台 -->
+  <div class="page" id="page-console">
+    <div class="row" id="quick-cmds"></div>
+    <div id="console-view"></div>
+    <div class="row">命令: <input id="console-input" style="flex:1"><button class="btn" id="console-send">发送</button></div>
+  </div>
+
+  <!-- 目标 -->
+  <div class="page" id="page-target">
+    <div class="row"><label class="chk"><input type="checkbox" id="tg-auto" checked>自动轮询</label>
+      间隔(ms) <input id="tg-interval" style="width:70px" value="1000">
+      <button class="btn" id="tg-refresh">刷新</button>
+      <button class="btn" id="tg-halt">⏸ 暂停</button><button class="btn" id="tg-resume">▶ 继续</button>
+      <button class="btn" id="tg-srst">软复位暂停</button>
+      复位: <select id="tg-reset-mode"><option>halt</option><option>run</option><option>init</option></select>
+      <button class="btn" id="tg-reset">执行复位</button></div>
+    <div class="table-wrap"><table id="tg-table"><thead>
+      <tr><th>*</th><th>目标名称</th><th>类型</th><th>端序</th><th>TAP</th><th>状态</th></tr>
+    </thead><tbody></tbody></table></div>
+    <p class="muted">双击行可将该目标设为当前目标</p>
+  </div>
+
+  <!-- 寄存器 -->
+  <div class="page" id="page-regs">
+    <div class="row"><button class="btn" id="reg-refresh">刷新</button>
+      <label class="chk"><input type="checkbox" id="reg-auto" checked>暂停时自动刷新</label>
+      筛选: <input id="reg-filter" style="width:160px"><span class="muted" id="reg-status"></span></div>
+    <div class="table-wrap" style="max-height:calc(100vh - 200px)"><table id="reg-table"><thead>
+      <tr><th>#</th><th>组</th><th>名称</th><th>位宽</th><th>值</th><th>标志</th></tr>
+    </thead><tbody></tbody></table></div>
+    <p class="muted">双击寄存器行可修改其值（目标需处于 halted 状态）</p>
+  </div>
+
+  <!-- 内存 -->
+  <div class="page" id="page-mem">
+    <div class="row">地址: <input id="mem-addr" value="0x08000000" style="width:120px">
+      数量: <input id="mem-count" type="number" value="64" min="1" max="1024" style="width:70px">
+      宽度: <select id="mem-width"><option>32 位 (mdw)</option><option>16 位 (mdh)</option><option>8 位 (mdb)</option><option>64 位 (mdd)</option></select>
+      <button class="btn" id="mem-read">读取</button>
+      <button class="btn" id="mem-prev">◀ 上一页</button><button class="btn" id="mem-next">下一页 ▶</button>
+      <span class="muted" id="mem-status"></span></div>
+    <div class="table-wrap" style="max-height:calc(100vh - 210px)"><table id="mem-table"></table></div>
+    <p class="muted">双击数值单元格可修改内存（目标需处于 halted 状态）</p>
+  </div>
+
+  <!-- 烧写 -->
+  <div class="page" id="page-flash">
+    <fieldset><legend>固件烧写 (program)</legend>
+      <div class="row"><input id="fl-file" style="flex:1" placeholder="固件镜像路径"><button class="btn" id="fl-browse">浏览…</button></div>
+      <div class="row">偏移地址(可选): <input id="fl-offset" style="width:130px" placeholder="仅 bin 需要">
+        <label class="chk"><input type="checkbox" id="fl-verify" checked>烧写后校验 (verify)</label>
+        <label class="chk"><input type="checkbox" id="fl-reset" checked>烧写后复位 (reset)</label>
+        <label class="chk"><input type="checkbox" id="fl-preverify">烧写前校验 (preverify)</label>
+        <button class="btn" id="fl-program" style="background:var(--blue);color:#fff;font-weight:bold">⬇  烧写固件</button>
+        <span class="muted" id="fl-status"></span></div>
+    </fieldset>
+    <fieldset><legend>Flash 存储体 (flash banks)</legend>
+      <div class="row"><button class="btn" id="fl-banks-refresh">刷新</button>
+        信息输出: <input id="fl-bank-num" value="0" style="width:40px"><button class="btn" id="fl-info">信息 (flash info)</button>
+        扇区范围: <input id="fl-first" value="0" style="width:40px"> - <input id="fl-last" value="last" style="width:60px">
+        <button class="btn" id="fl-erase">擦除扇区</button></div>
+      <div class="table-wrap" style="max-height:140px"><table id="fl-table"><thead>
+        <tr><th>#</th><th>名称</th><th>驱动</th><th>基址</th><th>大小</th><th>总线宽</th><th>芯片宽</th></tr>
+      </thead><tbody></tbody></table></div>
+    </fieldset>
+    <div id="flash-out"></div>
+  </div>
+
+  <!-- 断点 -->
+  <div class="page" id="page-bp">
+    <fieldset><legend>断点 (bp / rbp)</legend>
+      <div class="row">类型: <select id="bp-type"><option>软件 (默认)</option><option>硬件 (hw)</option></select>
+        地址: <input id="bp-addr" style="width:130px"> 长度: <select id="bp-len"><option>1</option><option selected>2</option><option>4</option><option>8</option></select>
+        <button class="btn" id="bp-add">添加断点</button>
+        <button class="btn" id="bp-del">删除选中</button><button class="btn" id="bp-delall">全部删除</button>
+        <button class="btn" id="bp-refresh">刷新</button></div>
+      <div class="table-wrap" style="max-height:180px"><table id="bp-table"><thead>
+        <tr><th>类型</th><th>地址</th><th>长度</th><th>备注</th></tr></thead><tbody></tbody></table></div>
+    </fieldset>
+    <fieldset><legend>观察点 (wp / rwp)</legend>
+      <div class="row">地址: <input id="wp-addr" style="width:130px"> 长度: <select id="wp-len"><option>1</option><option>2</option><option selected>4</option><option>8</option></select>
+        访问: <select id="wp-access"><option>读 (r)</option><option>写 (w)</option><option selected>读写 (a)</option></select>
+        值(可选): <input id="wp-value" style="width:90px"> 掩码(可选): <input id="wp-mask" style="width:90px">
+        <button class="btn" id="wp-add">添加观察点</button>
+        <button class="btn" id="wp-del">删除选中</button><button class="btn" id="wp-delall">全部删除</button></div>
+      <div class="table-wrap" style="max-height:180px"><table id="wp-table"><thead>
+        <tr><th>地址</th><th>长度</th><th>访问</th><th>值</th><th>掩码</th></tr></thead><tbody></tbody></table></div>
+    </fieldset>
+  </div>
+
+  <!-- GDB -->
+  <div class="page" id="page-gdb">
+    <fieldset><legend>GDB 服务器</legend><p id="gdb-info"></p></fieldset>
+    <fieldset><legend>外部 GDB 调试器</legend>
+      <div class="row">GDB 程序: <input id="gdb-path" style="flex:1"></div>
+      <div class="row">GDB 参数: <input id="gdb-args" style="flex:1"></div>
+      <p id="gdb-preview" style="color:var(--blue);font-family:Consolas,monospace"></p>
+      <div class="row"><button class="btn" id="gdb-copy">复制命令行</button>
+        <button class="btn" id="gdb-launch">在新控制台启动 GDB</button></div>
+    </fieldset>
+  </div>
+
+  <div id="statusbar"><span id="sb-ports"></span><span id="status-msg"></span></div>
+  <script src="app.js"></script>
+</body>
+</html>

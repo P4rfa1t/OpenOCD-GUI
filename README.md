@@ -94,6 +94,10 @@ python -m unittest discover -s tests   # parser & command-builder tests
 python run.py --smoke                  # headless UI construction check
 ```
 
+### Framework evaluation: PySide6 & Tauri 2 ports
+
+The same app has also been ported to [PySide6](ports/pyside6/) (reusing `openocd_gui/core/`) and [Tauri 2](ports/tauri2/) (Rust + vanilla JS rewrite), with measured size/memory/LOC comparison in [ports/COMPARISON.md](ports/COMPARISON.md). The Tkinter version in the repo root remains the primary front-end.
+
 ## 🗺️ Roadmap
 
 - [ ] ELF-aware register/memory views
