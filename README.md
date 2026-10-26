@@ -45,14 +45,21 @@ A cross-platform GUI front-end for [OpenOCD](https://openocd.org) (verified agai
 
 ### Option 1 — Download a prebuilt binary
 
-**Windows** — a single self-contained **`OpenOCD-GUI.exe`**, no DLLs beside it. Grab it from the [releases](https://github.com/P4rfa1t/OpenOCD-GUI/releases/latest) page.
+Every push to `main` produces the files below as build [artifacts](https://github.com/P4rfa1t/OpenOCD-GUI/actions/workflows/build.yml) (downloading them needs a GitHub login); pushing a `v*` tag publishes the very same files as a [Release](https://github.com/P4rfa1t/OpenOCD-GUI/releases) — a Release appears only when all three platform builds succeed. **v0.3.2** ships these:
 
-- WebView2 Runtime is required — preinstalled on Windows 10/11 (older systems: [Evergreen installer](https://developer.microsoft.com/microsoft-edge/webview2/))
-- The release is built with the **MSVC** toolchain, which links `WebView2Loader` statically into the exe. Older 0.2.0 builds used mingw and needed a separate `WebView2Loader.dll` — those are superseded.
+| Artifact | Contents | How to run |
+|---|---|---|
+| `OpenOCD-GUI-windows-x86_64` | one self-contained `openocd-gui.exe` | double-click it |
+| `OpenOCD-GUI-linux-x86_64` | the raw `openocd-gui` **and** `OpenOCD-GUI-linux-x86_64.tar.gz` | extract and run (unpacked on POSIX it is already executable; `chmod +x` only if the bit was lost), or `tar xzf OpenOCD-GUI-linux-x86_64.tar.gz && ./openocd-gui` |
+| `OpenOCD-GUI-linux-packages` | `.deb` / `.AppImage` (best effort) | install the `.deb`, or run the AppImage (unpacking already restores its executable bit) |
+| `OpenOCD-GUI-macos-aarch64` | the raw `openocd-gui` (Apple Silicon) **and** `OpenOCD-GUI-macos-aarch64.tar.gz` | from a terminal: `xattr -d com.apple.quarantine ./openocd-gui && ./openocd-gui` |
+| `OpenOCD-GUI-macos-packages` | `.dmg` / `OpenOCD-GUI-macos-app.tar.gz` (best effort) | open the `.dmg`, or unpack the tarball to get `OpenOCD-GUI.app` |
 
-**Linux** — build from source (below) or take the CI artifact `OpenOCD-GUI-linux-x86_64`. Requirements: OpenOCD ≥ 0.12, GTK 3 + WebKitGTK 4.1 runtime (`libwebkit2gtk-4.1-0`, `libgtk-3-0`), and an X11/Wayland session.
+On the Releases page the two bare binaries are renamed to `OpenOCD-GUI-linux-x86_64` and `OpenOCD-GUI-macos-aarch64` so that they cannot collide (`openocd-gui.exe` and both tarballs keep their names); they are extensionless executables, not archives.
 
-**macOS** — CI artifact `OpenOCD-GUI-macos-aarch64`; WebKit is part of the OS.
+- **Windows** — only the WebView2 Runtime is needed; it is preinstalled on Windows 10/11 (older systems: [Evergreen installer](https://developer.microsoft.com/microsoft-edge/webview2/)). The release is built with the **MSVC** toolchain, which links `WebView2Loader` statically into the exe; the 0.2.0-era mingw builds needed a separate DLL beside it and are superseded — the [Releases](https://github.com/P4rfa1t/OpenOCD-GUI/releases) page still carries that 0.2.0 zip, which v0.3.2 does not need.
+- **Linux** — the two files in the x86_64 artifact are the same binary on purpose, and both work: the artifact zip we produced does record `100755` (`-rwxr-xr-x`) — measured on the downloaded artifact — but GitHub does not guarantee artifact permissions (the Actions docs say every file comes back as `644`), so the tarball is the one to trust: unpack and run. If the raw file lost the bit (a path through Windows, a re-pack after a browser download), `chmod +x` fixes it. Either way you need the WebKitGTK 4.1 runtime (`libwebkit2gtk-4.1-0`, `libgtk-3-0`; Ubuntu 22.04+), OpenOCD ≥ 0.12 and an X11/Wayland session. `.deb` / `.AppImage` are best-effort: if the bundling step fails, that artifact comes out empty.
+- **macOS** — the bare binary is a Mach-O executable, which carries **no file extension** by design: that is expected, not a truncated download. It is not a `.app` either, so it does not double-click — start it from a terminal (`./openocd-gui`). Anything downloaded by a browser gets the quarantine attribute and Gatekeeper blocks it: clear it with `xattr -d com.apple.quarantine ./openocd-gui`, or allow it under System Settings → Privacy & Security. CI applies an ad-hoc signature (`codesign --sign -`), but there is no Apple developer certificate and no notarization, so the first launch may still be blocked.
 
 ### Option 2 — Build from source
 
@@ -124,6 +131,7 @@ The GUI talks to OpenOCD through exactly two channels: the **stdout** of the spa
 - [ ] 8.3 short-path fallback for non-ANSI-representable firmware paths
 - [x] Linux/macOS CI builds (WebKitGTK on Linux)
 - [ ] Rust unit tests for the TCL framing & parsers
+- [x] Linux packaging: `.deb` / `.AppImage` produced as best-effort artifacts (see above); AUR not yet
 
 ## 📄 License
 

@@ -62,20 +62,36 @@ jobs:
         run: |
           file src-tauri/target/release/openocd-gui
           ldd src-tauri/target/release/openocd-gui | head -30
+      - name: Package the binary with tar (keeps the executable bit)
+        run: |
+          # Same binary, second copy: the artifact zip we produce does record the +x
+          # bit (measured on the downloaded artifact, although GitHub documents
+          # artifacts as 644), while the tarball keeps modes whatever the file passes
+          # through (a Windows round trip, a re-pack after a browser download).
+          cd src-tauri/target/release
+          chmod +x openocd-gui
+          tar -czf OpenOCD-GUI-linux-x86_64.tar.gz openocd-gui
+          tar -tzvf OpenOCD-GUI-linux-x86_64.tar.gz
+      # Two copies on purpose: the raw binary (the zip records the +x bit in practice,
+      # but GitHub does not guarantee artifact modes, and a path through Windows or a
+      # re-pack can drop it) together with the same binary in a tarball, whose mode is
+      # guaranteed by the tar format.
       - uses: actions/upload-artifact@v4
         with:
           name: OpenOCD-GUI-linux-x86_64
-          path: src-tauri/target/release/openocd-gui
+          path: |
+            src-tauri/target/release/openocd-gui
+            src-tauri/target/release/OpenOCD-GUI-linux-x86_64.tar.gz
           if-no-files-found: error
       - name: Bundle .deb / .AppImage (best effort)
         continue-on-error: true
         run: |
           cargo install tauri-cli --version "^2" --locked
-          cd src-tauri && cargo tauri build
+          cd src-tauri && cargo tauri build --bundles deb,appimage
       - uses: actions/upload-artifact@v4
         continue-on-error: true
         with:
-          name: OpenOCD-GUI-linux-bundles
+          name: OpenOCD-GUI-linux-packages
           path: |
             src-tauri/target/release/bundle/deb/*.deb
             src-tauri/target/release/bundle/appimage/*.AppImage
@@ -93,8 +109,89 @@ jobs:
       - name: Build
         working-directory: src-tauri
         run: cargo build --release
+      - name: Verify the Mach-O binary
+        working-directory: src-tauri
+        run: |
+          file target/release/openocd-gui
+          otool -L target/release/openocd-gui | head -20
+          test -x target/release/openocd-gui && echo "executable bit: OK"
+          chmod +x target/release/openocd-gui
+          codesign --force --sign - target/release/openocd-gui || echo "ad-hoc codesign skipped"
+          codesign -dv target/release/openocd-gui 2>&1 | head -5 || true
+      - name: Package the binary with tar (keeps the executable bit)
+        working-directory: src-tauri
+        run: |
+          # A bare Mach-O has no file extension on purpose. ld64 already ad-hoc signs
+          # arm64 binaries; the tarball is the same file in one container that keeps
+          # its mode everywhere.
+          tar -czf target/release/OpenOCD-GUI-macos-aarch64.tar.gz -C target/release openocd-gui
+          tar -tzvf target/release/OpenOCD-GUI-macos-aarch64.tar.gz
+      # The raw Mach-O binary has no extension by design; the tarball copy is the same
+      # binary whose mode survives any transport.
       - uses: actions/upload-artifact@v4
         with:
           name: OpenOCD-GUI-macos-aarch64
-          path: src-tauri/target/release/openocd-gui
+          path: |
+            src-tauri/target/release/openocd-gui
+            src-tauri/target/release/OpenOCD-GUI-macos-aarch64.tar.gz
           if-no-files-found: error
+      - name: Bundle .app / .dmg (best effort)
+        continue-on-error: true
+        run: |
+          cargo install tauri-cli --version "^2" --locked
+          cd src-tauri && cargo tauri build --bundles app,dmg
+      - name: Pack the .app with tar (a .app is a directory; its inner Mach-O must stay executable)
+        continue-on-error: true
+        working-directory: src-tauri
+        run: |
+          if [ -d target/release/bundle/macos ]; then
+            tar -czf target/release/OpenOCD-GUI-macos-app.tar.gz -C target/release/bundle/macos .
+            tar -tzf target/release/OpenOCD-GUI-macos-app.tar.gz | head -20
+          else
+            echo "no bundle/macos directory; skipped"
+          fi
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: OpenOCD-GUI-macos-packages
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/OpenOCD-GUI-macos-app.tar.gz
+          if-no-files-found: warn
+
+  release:
+    name: Publish GitHub Release (on v* tags)
+    # Branch pushes only produce artifacts; a tag push publishes the same files as a
+    # Release, which is what the README points at for end users.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux, macos]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      # Artifact directories are kept apart (both linux and macos ship a bare
+      # openocd-gui), so flatten into one directory and rename the bare binaries.
+      - name: Flatten into release assets
+        run: |
+          set -eux
+          mkdir -p rel
+          cp dist/OpenOCD-GUI-windows-x86_64/openocd-gui.exe rel/
+          cp dist/OpenOCD-GUI-linux-x86_64/openocd-gui rel/OpenOCD-GUI-linux-x86_64
+          cp dist/OpenOCD-GUI-linux-x86_64/OpenOCD-GUI-linux-x86_64.tar.gz rel/
+          cp dist/OpenOCD-GUI-macos-aarch64/openocd-gui rel/OpenOCD-GUI-macos-aarch64
+          cp dist/OpenOCD-GUI-macos-aarch64/OpenOCD-GUI-macos-aarch64.tar.gz rel/
+          find dist -name '*.deb' -exec cp {} rel/ \;
+          find dist -name '*.AppImage' -exec cp {} rel/ \;
+          find dist -name '*.dmg' -exec cp {} rel/ \;
+          find dist -name 'OpenOCD-GUI-macos-app.tar.gz' -exec cp {} rel/ \;
+          # `find -exec cp` does not fail the step when a copy fails, so assert the
+          # required assets (exe + 4 tarball/binary files) really made it through.
+          test "$(ls rel | wc -l)" -ge 5
+          ls -lR rel
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: rel/*
+          generate_release_notes: true

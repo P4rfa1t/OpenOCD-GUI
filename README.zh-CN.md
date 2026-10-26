@@ -45,14 +45,21 @@
 
 ### 方式一 — 下载现成二进制
 
-**Windows** — 单个自包含的 **`OpenOCD-GUI.exe`**，旁边不需要任何 DLL。从 [Releases](https://github.com/P4rfa1t/OpenOCD-GUI/releases/latest) 下载。
+每次推 `main` 都会把下面这些文件作为构建 [Artifacts](https://github.com/P4rfa1t/OpenOCD-GUI/actions/workflows/build.yml) 产出（下载需登录 GitHub）；推 `v*` 标签则把同一批文件发布成 [Release](https://github.com/P4rfa1t/OpenOCD-GUI/releases)（三个平台都构建成功才会发布）。**v0.3.2** 一共有这些：
 
-- 需要 WebView2 Runtime——Windows 10/11 系统自带（老系统装 [Evergreen 运行时](https://developer.microsoft.com/microsoft-edge/webview2/)）
-- 发布版用 **MSVC** 工具链构建，`WebView2Loader` 已静态链接进 exe。早期的 0.2.0 用 mingw 构建、需要外挂 `WebView2Loader.dll`，那些已被取代
+| 产物 | 内容 | 怎么跑 |
+|---|---|---|
+| `OpenOCD-GUI-windows-x86_64` | 单个自包含的 `openocd-gui.exe` | 双击即可 |
+| `OpenOCD-GUI-linux-x86_64` | 裸二进制 `openocd-gui` **和** `OpenOCD-GUI-linux-x86_64.tar.gz` | 解包即跑（在 POSIX 上解包就已带可执行位；万一丢了再 `chmod +x`），或 `tar xzf OpenOCD-GUI-linux-x86_64.tar.gz && ./openocd-gui` |
+| `OpenOCD-GUI-linux-packages` | `.deb` / `.AppImage`（best-effort） | 装 `.deb`，或直接运行 AppImage（解包就已带可执行位） |
+| `OpenOCD-GUI-macos-aarch64` | 裸二进制 `openocd-gui`（Apple Silicon）**和** `OpenOCD-GUI-macos-aarch64.tar.gz` | 终端里 `xattr -d com.apple.quarantine ./openocd-gui && ./openocd-gui` |
+| `OpenOCD-GUI-macos-packages` | `.dmg` / `OpenOCD-GUI-macos-app.tar.gz`（best-effort） | 挂载 `.dmg`，或解包 tar 得到 `OpenOCD-GUI.app` |
 
-**Linux** — 源码构建（见下），或取 CI 产物 `OpenOCD-GUI-linux-x86_64`。需要 OpenOCD ≥ 0.12、GTK 3 + WebKitGTK 4.1 运行时（`libwebkit2gtk-4.1-0`、`libgtk-3-0`），以及 X11/Wayland 会话。
+在 Releases 页上，两个裸二进制为了不重名分别叫 `OpenOCD-GUI-linux-x86_64` 与 `OpenOCD-GUI-macos-aarch64`（`openocd-gui.exe` 与两个 tar 包保持原名）；它们是没有扩展名的可执行文件，不是压缩包。
 
-**macOS** — CI 产物 `OpenOCD-GUI-macos-aarch64`；WebKit 由系统提供。
+- **Windows** — 只依赖 WebView2 Runtime，Windows 10/11 系统自带（老系统装 [Evergreen 运行时](https://developer.microsoft.com/microsoft-edge/webview2/)）。发布版用 **MSVC** 工具链构建，`WebView2Loader` 已静态链接进 exe；0.2.0 时期的 mingw 构建需要外挂 DLL，那些已被取代 —— Releases 页上目前仍挂着 0.2.0 的那套压缩包，v0.3.2 不再需要它。
+- **Linux** — x86_64 产物里那两个文件是同一个二进制的两份，都能用：我们产出的 zip 实测记录的是 `100755`（`-rwxr-xr-x`，在下载回来的产物上量过），但 GitHub 不保证 artifact 的权限（官方 Actions 文档说文件一律回落到 `644`），所以可靠的还是 tar 包：解包即跑。若裸文件丢了可执行位（经 Windows 解压、或浏览器下载后重新打包），补一条 `chmod +x` 即可。两种方式都需要 WebKitGTK 4.1 运行时（`libwebkit2gtk-4.1-0`、`libgtk-3-0`，Ubuntu 22.04+）、OpenOCD ≥ 0.12 以及 X11/Wayland 会话。`.deb` / `.AppImage` 是 best-effort：打包步骤失败时该产物可能为空。
+- **macOS** — 裸二进制是 Mach-O 可执行文件，本来就**没有扩展名**，这是正常的、不是下载残缺；它也不是 `.app`，不能双击，要从终端 `./openocd-gui` 启动。浏览器下载来的文件会带 quarantine 属性被 Gatekeeper 拦下，用 `xattr -d com.apple.quarantine ./openocd-gui` 清掉（或在「系统设置 → 隐私与安全性」里放行）。CI 里做了 ad-hoc 签名（`codesign --sign -`），但没有 Apple 开发者证书、未 notarize，所以首次运行仍可能被拦。
 
 ### 方式二 — 源码构建
 
@@ -124,7 +131,7 @@ GUI 与 OpenOCD 只通过两个通道通信：子进程 **stdout**（→ 日志�
 - [ ] 非 ANSI 可表示路径的 8.3 短路径回退
 - [x] Linux/macOS CI 构建（Linux 走 WebKitGTK）
 - [ ] TCL 帧协议与解析器的 Rust 单元测试
-- [ ] Linux 发行版打包（.deb / .AppImage / AUR）
+- [x] Linux 打包：`.deb` / `.AppImage` 已作为 best-effort 产物产出（见上）；AUR 未做
 
 ## 📄 许可证
 
