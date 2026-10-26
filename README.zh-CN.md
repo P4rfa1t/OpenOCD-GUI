@@ -21,9 +21,9 @@
 | ⬇️ **烧写** | 一键固件烧写（`program`，支持 verify / preverify / reset / 偏移；非 ASCII 路径自动按 ANSI 编码页编码）、flash bank 信息（表格加高，并补上 名称 / 驱动 / 基址 / 大小 / 总线宽 / 芯片宽 的列说明）、扇区擦除 |
 | 🛑 **断点** | 硬件/软件断点与观察点（`bp/rbp/wp/rwp`）列表化管理；表格行可点选，**删除选中** 作用于选中行，另有 `#` 序号列，增删失败会显示失败原因 |
 | 🔗 **GDB** | 连接信息、一键复制命令行、一键启动外部 GDB，以及 **自动检测**（扫描 `PATH` 与常见 Arm GNU Toolchain 安装位置）与 **检测版本**；多个候选以弹窗和路径框下拉两种方式列出 |
-| ℹ️ **关于** | 版本信息、OpenOCD 版本检测、配置目录、当前界面语言，以及 OpenOCD 官方文档 / 本项目 / P4rfa1t/OpenOCD 三个可点击链接 |
+| ℹ️ **关于** | 版本信息、OpenOCD 版本检测、配置目录、界面语言下拉（自动 / 简体中文 / English，切换即时生效），以及 OpenOCD 官方文档 / OpenOCD-GUI / P4rfa1t/OpenOCD 三个可点击链接 |
 
-### 🆕 本轮新增（v0.3.4）
+### 🆕 本轮新增（v0.3.5）
 
 - **配置** —— 接口 cfg / 目标·板级 cfg 改为可输入筛选（type-to-search）的选择框，脚本库条目再多也能秒搜
 - **查看 cfg 内容** —— 拆成两个按钮，分别放在接口 cfg 行与目标/板级 cfg 行上，各自只读预览该行 cfg 全文（含路径），不再是一个总按钮
@@ -39,7 +39,7 @@
 - **断点 / 观察点，成败判定改为核对条目数** —— 不再看 TCL 返回值：OpenOCD 的 `breakpoint_add` 失败时只把原因写进它自己的日志、TCL 侧照样回空串，所以本工具在每条命令后重新列一遍断点/观察点，比对条目数来判定成败
 - **断点 / 观察点，前置校验** —— 发送命令前先校验地址与长度：长度只能是 1 / 2 / 4，地址必须是长度的整数倍（提示里直接给出最近的合法地址）
 - **Hybrid 断点** —— 解析器现在会识别 OpenOCD 在 Hybrid 断点下方追加的 `|--->linked with ContextID: 0x…` 续行，并把它挂到上一条断点上
-- **界面文案表（i18n）** —— 每一句用户可见文案都集中到 `ui/i18n.js`（zh 表 301 个键）：`index.html` 只留键名（`data-i18n`、`data-i18n-placeholder`），`app.js` 统一走 `t("键", { … })`，以后加语言是改数据、不是改代码
+- **界面文案表（i18n）** —— 每一句用户可见文案都集中到 `ui/i18n.js`（zh 表 308 个键）：`index.html` 只留键名（`data-i18n`、`data-i18n-placeholder`），`app.js` 统一走 `t("键", { … })`，以后加语言是改数据、不是改代码
 - **语言设置会持久化** —— 选择存在设置文件的 `lang` 字段里；当前语言缺的键自动回落 `zh`，两边都缺的键原样显示键名，一眼就能看出漏翻
 - **下拉不再依赖中文文案** —— 日志过滤与内存宽度改用 `<option value>` 判断（`all|info|warn|err`、`mdw|mdh|mdb|mdd`），不再按显示出来的中文取值
 - **页面描述精简** —— 配置页（cfg 加载顺序）、日志文件用途、Flash 存储体、GDB 自动检测、关于页说明这些长段都压到一两行
@@ -48,15 +48,27 @@
 - **关窗口会清理 OpenOCD 子进程** —— 以前直接关窗口会把子进程留在那儿，它继续占着调试器（libusb）与端口，于是下次启动报 `libusb_open() failed with LIBUSB_ERROR_ACCESS` / `open failed`。现在由一个 `shutdown_openocd(state, graceful)` 同时服务「停止」按钮与 Tauri 的 `ExitRequested` / `Exit`；启动之前还会先探测 TCL 端口：残留的 OpenOCD 先用 `version` 确认身份，再请它 `shutdown` 并等它退出，端口仍被占着就直接报错、提示结束 `openocd.exe`
 - **启动即退出的诊断提示** —— OpenOCD 启动后 4 秒内就退出时，后端发 `ocd-hint` 事件，日志页会提示多半是上一个 OpenOCD 还占着调试器
 - **连接状态机** —— 状态标签由后端事件驱动，走「已停止 → 启动中… → 运行中 →（点停止）停止中… → 已停止」；主动「停止」不会再显示「异常退出」（后端只在非主动停止时才发失败事件）
-- **语言重刷后动态文案不被打回** —— 切换/重刷语言后，状态标签与 TCL 标签由 JS 按新语言重写（`i18n-applied` → `refreshDynamicLabels`），不会被 `data-i18n` 的静态文案覆盖
+- **语言重刷后动态文案不被打回** —— 切换/重刷语言后，由 `i18n-applied` 事件触发的 `refreshDynamicLabels` 会把「JS 负责、静态 `data-i18n` 只是占位」的标签全部按当前语言重写，占位文案再也覆盖不回来：服务状态标签、TCL 标签、关于页「当前显示」说明，以及配置页的脚本扫描结果行（`#cfg-scan-label`）与启动顺序预览（`#cfg-order-preview`）。扫描行按 `lastScan` 里保存的状态重建，只有从未扫描过时才回落到 `cfg.scan.none`（「未扫描」）
 - **错误提示改为页内浮层** —— 不再用原生 `alert`：它是系统模态对话框，会把主窗口置灰，弹窗没关掉时连窗口都关不了。现在错误只在页内浮层里显示（`showModal`，标题「出错了」），状态栏同步显示同一条，窗口随时可关
-- **版本** —— 0.3.4
+- **新增英文界面文案表** —— i18n 现在带两张表，`zh` 与 `en`，**各 308 个键、键名完全相同**；界面语言在「关于」页下拉里切换，加语言是改数据、不是改代码
+- **英文表清理** —— `en` 表里残留的直角引号 `「」` 全部换成 “ ”，「当前显示：…」末尾补上分号；原先在代码里硬拼的两处文案改为走 i18n 键 —— 扫描计数用 `cfg.scan.count`，连接符用 `common.listSep`（英文 `; `、中文 `；`），不再把某一种语言的标点写死在代码里
+- **默认「自动」跟随系统语言** —— 语言偏好默认 `auto`：跟随系统语言显示简体中文 / English；系统语言没有对应文案表时回落 **英文**。`mapSystemTag()` 把 `zh` / `zh-CN` / `zh-Hans` / `zh-TW` 映射到 `zh`、`en` / `en-GB` 映射到 `en`，其余标签按主语言（subtag 前一段）匹配
+- **语言偏好会持久化** —— 「关于」页下拉里选的偏好（`auto` 或具体 code）在点「保存设置」时随其它设置一起写进配置文件的 `lang` 字段；写进去的是偏好，不是解析后的实际语言
+- **版本** —— 0.3.5
+
+### 🆕 本轮新增（v0.3.6）
+
+- **JS 动态文案统一登记** —— 前端自己写的每一处文案现在都注册一个渲染函数（`dynSet`），切语言时由 `refreshDynamicLabels` 调 `dynRefresh()` 整体重算：GDB 连接地址行、各处版本行（版本前缀 + 检测到的版本串，如 `版本: OpenOCD 0.12.0`）、关于页的更新检查结果行（其中的 via / when 片段也改成渲染时现算）、寄存器 / 内存 / 烧写状态行、断点与观察点的计数与空表占位、状态栏「目标: …」行
+- **关于页链接标签精简** —— 去掉「本项目」「我的」前缀，现在就是 `OpenOCD-GUI` 与 `P4rfa1t/OpenOCD`
+- **配置页删掉两条说明** —— 「『查看内容』= 只读预览该 cfg 全文，不改文件」与「顺序固定：接口 → 目标/板级」两条说明行已删；按钮与「启动顺序预览」行保留
+- **新增 `tb.targetNone`** —— 状态栏「目标: —」占位改成真键，因此 zh / en 两张表现在各 **308 个键**
+- **版本** —— 0.3.6
 
 ## 🚀 快速开始
 
 ### 方式一 — 下载现成二进制
 
-每次推 `main` 都会把下面这些文件作为构建 [Artifacts](https://github.com/P4rfa1t/OpenOCD-GUI/actions/workflows/build.yml) 产出（下载需登录 GitHub）；推 `v*` 标签则把同一批文件发布成 [Release](https://github.com/P4rfa1t/OpenOCD-GUI/releases)（三个平台都构建成功才会发布）。**v0.3.4** 一共有这些：
+每次推 `main` 都会把下面这些文件作为构建 [Artifacts](https://github.com/P4rfa1t/OpenOCD-GUI/actions/workflows/build.yml) 产出（下载需登录 GitHub）；推 `v*` 标签则把同一批文件发布成 [Release](https://github.com/P4rfa1t/OpenOCD-GUI/releases)（三个平台都构建成功才会发布）。**v0.3.5** 一共有这些：
 
 | 产物 | 内容 | 怎么跑 |
 |---|---|---|
@@ -68,7 +80,7 @@
 
 在 Releases 页上，两个裸二进制为了不重名分别叫 `OpenOCD-GUI-linux-x86_64` 与 `OpenOCD-GUI-macos-aarch64`（`openocd-gui.exe` 与两个 tar 包保持原名）；它们是没有扩展名的可执行文件，不是压缩包。
 
-- **Windows** — 只依赖 WebView2 Runtime，Windows 10/11 系统自带（老系统装 [Evergreen 运行时](https://developer.microsoft.com/microsoft-edge/webview2/)）。发布版用 **MSVC** 工具链构建，`WebView2Loader` 已静态链接进 exe；0.2.0 时期的 mingw 构建需要外挂 DLL，那些已被取代 —— Releases 页上目前仍挂着 0.2.0 的那套压缩包，v0.3.4 不再需要它。
+- **Windows** — 只依赖 WebView2 Runtime，Windows 10/11 系统自带（老系统装 [Evergreen 运行时](https://developer.microsoft.com/microsoft-edge/webview2/)）。发布版用 **MSVC** 工具链构建，`WebView2Loader` 已静态链接进 exe；0.2.0 时期的 mingw 构建需要外挂 DLL，那些已被取代 —— Releases 页上目前仍挂着 0.2.0 的那套压缩包，v0.3.5 不再需要它。
 - **Linux** — x86_64 产物里那两个文件是同一个二进制的两份，都能用：我们产出的 zip 实测记录的是 `100755`（`-rwxr-xr-x`，在下载回来的产物上量过），但 GitHub 不保证 artifact 的权限（官方 Actions 文档说文件一律回落到 `644`），所以可靠的还是 tar 包：解包即跑。若裸文件丢了可执行位（经 Windows 解压、或浏览器下载后重新打包），补一条 `chmod +x` 即可。两种方式都需要 WebKitGTK 4.1 运行时（`libwebkit2gtk-4.1-0`、`libgtk-3-0`，Ubuntu 22.04+）、OpenOCD ≥ 0.12 以及 X11/Wayland 会话。`.deb` / `.AppImage` 是 best-effort：打包步骤失败时该产物可能为空。
 - **macOS** — 裸二进制是 Mach-O 可执行文件，本来就**没有扩展名**，这是正常的、不是下载残缺；它也不是 `.app`，不能双击，要从终端 `./openocd-gui` 启动。浏览器下载来的文件会带 quarantine 属性被 Gatekeeper 拦下，用 `xattr -d com.apple.quarantine ./openocd-gui` 清掉（或在「系统设置 → 隐私与安全性」里放行）。CI 里做了 ad-hoc 签名（`codesign --sign -`），但没有 Apple 开发者证书、未 notarize，所以首次运行仍可能被拦。
 
@@ -140,11 +152,13 @@ GUI 与 OpenOCD 只通过两个通道通信：子进程 **stdout**（→ 日志�
 
 ### 新增一门语言
 
-界面上的每一句文案都集中在 `ui/i18n.js`，`zh` 既是基准表（301 个键）也是回落语言。加一门语言：
+界面上的每一句文案都集中在 `ui/i18n.js`，`zh` 既是基准表（**308 个键**）也是「键级缺失」的回落语言，`en` 已随附一份。再加一门语言：
 
 1. 在 `I18N` 里加一份与 `zh` 键名完全相同的表 —— 漏掉的键会自动回落 `zh`，两边都没有的键会原样显示键名，便于发现漏翻
-2. 把 `{ code: "xx", label: "…" }` 加进 `LANGS`，label 就是「关于」页显示的语言名
-3. 把 `~/.openocd_gui/settings.json`（Windows 上是 `%USERPROFILE%\.openocd_gui\settings.json`）里的 `lang` 改成该 code ——「关于」页有「打开目录」按钮可以直达，程序每次保存设置时也会把这个字段写回去
+2. 把 `{ code: "xx", label: "…" }` 加进 `LANGS`，label 就是「关于」页语言下拉里显示的名字
+3. 在「关于」页的「界面语言」下拉里选中它，点「保存设置」—— 偏好会随其它设置一起写进 `~/.openocd_gui/settings.json`（Windows 上是 `%USERPROFILE%\.openocd_gui\settings.json`）的 `lang` 字段；「关于」页有「打开目录」按钮可以直达
+
+选「自动」时，只要 `mapSystemTag()` 认得系统报出的语言标签就会自动切过去（映射规则见 `i18n.js`；必要时在 `mapSystemTag()` 里补一条主语言规则）
 
 `t("键名", { name: 值 })` 支持 `{name}` 插值。前端是打包进二进制的静态文件，改完文案表要重启（或重新构建）应用才会生效。
 

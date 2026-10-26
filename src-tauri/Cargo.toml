@@ -1,6 +1,6 @@
 [package]
 name = "openocd-gui"
-version = "0.3.4"
+version = "0.3.6"
 edition = "2021"
 description = "OpenOCD-GUI — a Tauri 2 front-end for OpenOCD"
 

@@ -58,7 +58,7 @@
     <button id="btn-stop" disabled data-i18n="tb.stop">■  停止</button>
     <span><span class="dot" id="state-dot"></span><b id="state-label" data-i18n="state.stopped">已停止</b></span>
     <span class="muted" id="tcl-label" data-i18n="tb.tcl.off">TCL: 未连接</span>
-    <span class="muted" id="target-label">目标: —</span>
+    <span class="muted" id="target-label" data-i18n="tb.targetNone">目标: —</span>
   </div>
   <div class="tabs" id="tabs"></div>
 
@@ -84,10 +84,8 @@
         <datalist id="cfg-target-list"></datalist>
         <button class="btn" id="cfg-target-browse" data-i18n="common.browse">浏览…</button>
         <button class="btn" id="cfg-target-clear" data-i18n="common.clear">清除</button><button class="btn" id="cfg-target-preview" data-i18n="cfg.preview">查看内容</button></div>
-      <p class="muted" data-i18n="cfg.preview.note">「查看内容」= 只读预览该 cfg 全文，不改文件。</p>
       <p class="muted" id="cfg-order-preview" data-i18n="cfg.order.none">未选择 cfg</p>
       <p class="muted" id="cfg-warn"></p>
-      <p class="muted" data-i18n="cfg.order.note">顺序固定：接口 → 目标/板级；board/*.cfg 通常已含两者，接口可留空。</p>
       <p class="muted" data-i18n="cfg.preset.note">配置预设（把这组配置存成命名预设，换板子时一键加载）：</p>
       <div class="row"><select id="profile-select" style="flex:1"></select>
         <button class="btn" id="profile-save" data-i18n="cfg.preset.save">保存为预设</button>
@@ -251,17 +249,17 @@
         <button class="btn" id="about-detect" data-i18n="common.detectVersion">检测版本</button></div>
       <div class="row"><span data-i18n="about.configDir">配置文件目录: </span><span class="muted" id="about-configdir">—</span>
         <button class="btn" id="about-open-configdir" data-i18n="about.openConfigDir">打开目录</button></div>
-      <div class="row"><span data-i18n="about.lang">界面语言: </span><b id="about-lang">简体中文</b>
+      <div class="row"><span data-i18n="about.lang">界面语言: </span><select id="about-lang"></select>
         <span class="muted" id="about-lang-note"></span></div>
     </fieldset>
     <fieldset><legend data-i18n="about.legend.links">链接（在系统浏览器中打开）</legend>
       <div class="row">
         <button class="btn link" data-url="https://openocd.org/doc/html/index.html" data-i18n="about.link.docs">OpenOCD 官方文档</button>
-        <button class="btn link" data-url="https://github.com/P4rfa1t/OpenOCD-GUI" data-i18n="about.link.project">本项目 · OpenOCD-GUI</button>
-        <button class="btn link" data-url="https://github.com/P4rfa1t/OpenOCD" data-i18n="about.link.ocd">我的 OpenOCD · P4rfa1t/OpenOCD</button></div>
+        <button class="btn link" data-url="https://github.com/P4rfa1t/OpenOCD-GUI" data-i18n="about.link.project">OpenOCD-GUI</button>
+        <button class="btn link" data-url="https://github.com/P4rfa1t/OpenOCD" data-i18n="about.link.ocd">P4rfa1t/OpenOCD</button></div>
       <p class="muted"><span data-i18n="about.link.docs">OpenOCD 官方文档</span>：https://openocd.org/doc/html/index.html</p>
-      <p class="muted"><span data-i18n="about.link.project">本项目 · OpenOCD-GUI</span>：https://github.com/P4rfa1t/OpenOCD-GUI</p>
-      <p class="muted"><span data-i18n="about.link.ocd">我的 OpenOCD · P4rfa1t/OpenOCD</span>：https://github.com/P4rfa1t/OpenOCD</p>
+      <p class="muted"><span data-i18n="about.link.project">OpenOCD-GUI</span>：https://github.com/P4rfa1t/OpenOCD-GUI</p>
+      <p class="muted"><span data-i18n="about.link.ocd">P4rfa1t/OpenOCD</span>：https://github.com/P4rfa1t/OpenOCD</p>
     </fieldset>
     <fieldset><legend data-i18n="about.legend.about">说明</legend>
       <p class="muted" data-i18n="about.desc">OpenOCD 的图形前端：拼命令行、管理 OpenOCD 进程、经 TCL 端口读写目标（目标/寄存器/内存/断点/烧写）。调试协议与 flash 算法来自 OpenOCD 本体；GDB 与编译器不随本项目提供。</p>

@@ -40,13 +40,14 @@ struct Settings {
     auto_refresh_regs: bool,
     #[serde(default)]
     window_geometry: String,
-    /// 界面语言（zh / en…）：决定前端用 I18N 里哪张文案表
+    /// 界面语言偏好："auto"（跟随系统语言，默认）或具体 code（zh / en…）
     #[serde(default = "default_lang")]
     lang: String,
 }
 
 fn default_lang() -> String {
-    "zh".into()
+    // "auto" = 跟随系统语言；前端 setLang 会把它解析成 I18N 里的某张表
+    "auto".into()
 }
 
 // Linux 上 GDB 常带版本后缀（gdb-multiarch / arm-none-eabi-gdb）

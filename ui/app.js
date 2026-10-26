@@ -202,7 +202,7 @@ function setConnTabs(enabled) {
 
 // ---------------------------------------------------------------- settings <-> form
 function formToSettings() {
-  settings.lang = currentLang();
+  settings.lang = currentLangPref();
   settings.openocd_path = $("cfg-exe").value.trim();
   settings.scripts_dir = $("cfg-scripts").value.trim();
   const ifcSel = $("cfg-interface"), tgtSel = $("cfg-target");
@@ -244,8 +244,7 @@ function settingsToForm() {
 }
 function updateGdbPreview() {
   $("gdb-preview").textContent = `${$("gdb-path").value} ${$("gdb-args").value}`;
-  const gp = settings?.gdb_port ?? 3333;
-  $("gdb-info").textContent = t("gdb.info", { port: gp });
+  dynSet("gdb-info", () => t("gdb.info", { port: settings?.gdb_port ?? 3333 }));
   $("sb-ports").textContent = `GDB ${settings?.gdb_port} · TCL ${settings?.tcl_port} · Telnet ${settings?.telnet_port}`;
 }
 
@@ -255,6 +254,11 @@ function updateGdbPreview() {
 const STATE_COLORS = { stopped: "#9ca3af", starting: "#f59e0b", running: "#10b981", stopping: "#f59e0b", failed: "#ef4444" };
 const STATE_KEYS = ["stopped", "starting", "running", "stopping", "failed"];
 let serverState = "stopped", tclOn = false;
+// 动态文案登记表：语言切换（applyI18n 派发 i18n-applied）时按当前语言重算。
+// 否则这些「JS 写出来」的文案会停在旧语言，或被 data-i18n 的静态文案打回。
+const dynText = {};
+function dynSet(id, render) { dynText[id] = render; const el = $(id); if (el) el.textContent = render(); }
+function dynRefresh() { for (const id in dynText) { const el = $(id); if (el) el.textContent = dynText[id](); } }
 function setServerState(state) {
   serverState = state;
   $("state-label").textContent = STATE_KEYS.indexOf(state) >= 0 ? t("state." + state) : String(state);
@@ -266,6 +270,43 @@ function setServerState(state) {
 function refreshDynamicLabels() {
   setServerState(serverState);
   $("tcl-label").textContent = tclOn ? t("tb.tcl.on") : t("tb.tcl.off");
+  updateLangNote();
+  // 这两处也是「动态文案 + 静态 data-i18n」双重身份，切换语言时必须按当前状态重写
+  updateCfgPreview();
+  renderScanLabel();
+  updateGdbPreview();
+  if (lastTargetState) $("target-label").textContent = t("tb.target", { v: lastTargetState });
+  dynRefresh();
+  // 表格的表头/占位/计数都是 JS 渲染的，切语言时按现有数据重画
+  renderBpTable(); renderWpTable();
+  if (regRows.length) renderRegs();
+  if (memRows.length) renderMem();
+}
+
+// 关于页语言下拉：第一项「自动（跟随系统语言）」，其余来自 i18n 的 LANGS
+function fillLangSelect() {
+  const sel = $("about-lang");
+  if (!sel) return;
+  sel.innerHTML = "";
+  const auto = document.createElement("option");
+  auto.value = LANG_AUTO;
+  auto.textContent = t("about.langAuto");
+  sel.appendChild(auto);
+  for (const l of langList()) {
+    const o = document.createElement("option");
+    o.value = l.code;
+    o.textContent = l.label;
+    sel.appendChild(o);
+  }
+  sel.value = currentLangPref();
+  sel.onchange = () => { setLang(sel.value); };
+}
+
+// 「当前显示：<语言>」+ 说明；语言变化后由 refreshDynamicLabels（i18n-applied）重刷
+function updateLangNote() {
+  const el = $("about-lang-note");
+  if (!el) return;
+  el.textContent = t("about.langNow", { label: langLabel(currentLang()) }) + " " + t("about.langNote");
 }
 async function startServer() {
   formToSettings();
@@ -360,7 +401,7 @@ function onTargets(text) {
   const cur = targetRows.find(r => r.current) || targetRows[0];
   if (cur) {
     lastTargetState = cur.state;
-    $("target-label").textContent = t("tb.target", { v: cur.state });
+    dynSet("target-label", () => t("tb.target", { v: lastTargetState || "—" }));
   }
 }
 async function targetAction(cmd) {
@@ -374,20 +415,20 @@ async function targetAction(cmd) {
 async function refreshRegs() {
   if (regPending) return;
   regPending = true;
-  $("reg-status").textContent = t("reg.reading");
+  dynSet("reg-status", () => t("reg.reading"));
   try {
     const text = await tclExec("reg", 20000);
     const { regs, err } = parseRegs(text);
     regRows = regs;
     if (regs.length) {
-      $("reg-status").textContent = t("reg.count", { n: regs.length });
+      dynSet("reg-status", () => t("reg.count", { n: regs.length }));
     } else {
       // 解析不出任何寄存器时把原始输出打到日志页，便于定位格式差异
-      $("reg-status").textContent = err || t("reg.unparsed");
+      dynSet("reg-status", () => err || t("reg.unparsed"));
       appendLog("$ reg\n" + text);
     }
     renderRegs();
-  } catch (e) { $("reg-status").textContent = t("reg.readFail", { e: e }); }
+  } catch (e) { dynSet("reg-status", () => t("reg.readFail", { e: e })); }
   regPending = false;
 }
 function renderRegs() {
@@ -418,14 +459,14 @@ async function readMem(addr) {
   const [size, rcmd] = MEM_WIDTHS[$("mem-width").value];
   memSize = size; memAddr = addr;
   const count = parseInt($("mem-count").value) || 160;
-  $("mem-status").textContent = t("mem.reading");
+  dynSet("mem-status", () => t("mem.reading"));
   try {
     const text = await tclExec(`${rcmd} 0x${addr.toString(16)} ${count}`, 20000);
     memRows = parseMd(text);
-    $("mem-status").textContent = memRows.length ?
-      t("mem.items", { n: memRows.reduce((n, [, v]) => n + v.length, 0) }) : t("mem.noData");
+    dynSet("mem-status", () => memRows.length ?
+      t("mem.items", { n: memRows.reduce((n, [, v]) => n + v.length, 0) }) : t("mem.noData"));
     renderMem();
-  } catch (e) { $("mem-status").textContent = t("mem.readFail", { e: e }); }
+  } catch (e) { dynSet("mem-status", () => t("mem.readFail", { e: e })); }
 }
 function renderMem() {
   const perLine = 32 / memSize;
@@ -523,7 +564,7 @@ async function programFirmware() {
   const path = $("fl-file").value.trim();
   if (!path) { notify(t("fl.needFile"), true); return; }
   $("fl-program").disabled = true;
-  $("fl-status").textContent = t("fl.running");
+  dynSet("fl-status", () => t("fl.running"));
   $("flash-out").textContent = t("fl.programStarted");
   const r = await runWithLog(() => invoke("program_firmware", {
     path, offset: $("fl-offset").value.trim(),
@@ -532,11 +573,11 @@ async function programFirmware() {
   showFlashOut(flashParts(r));
   const fb = r.err ? null : failLine(r.res + "\n" + r.log);
   if (r.err || fb) {
-    $("fl-status").textContent = t("fl.failed");
+    dynSet("fl-status", () => t("fl.failed"));
     notify(t("fl.programFail", { e: r.err || fb }), true);
     appendLog("Error: " + (r.err || fb));
   } else {
-    $("fl-status").textContent = t("fl.done");
+    dynSet("fl-status", () => t("fl.done"));
     refreshTargetsOnce();
   }
   $("fl-program").disabled = false;
@@ -558,7 +599,7 @@ async function eraseSectors() {
   const cmd = `flash erase_sector ${$("fl-bank-num").value || "0"} ${$("fl-first").value || "0"} ${$("fl-last").value || "last"}`;
   const r = await runWithLog(() => tclExec(cmd, 120000));
   const fb = r.err ? null : failLine(r.res + "\n" + r.log);
-  if (r.err || fb) { $("fl-status").textContent = t("fl.failed"); notify(t("fl.eraseFail", { e: r.err || fb }), true); return; }
+  if (r.err || fb) { dynSet("fl-status", () => t("fl.failed")); notify(t("fl.eraseFail", { e: r.err || fb }), true); return; }
   showFlashOut(flashParts(r));
   appendLog(t("fl.eraseDone"));
   flashInfo();
@@ -726,11 +767,10 @@ async function boot() {
   booted = true;
   document.addEventListener("i18n-applied", refreshDynamicLabels);
   settings = await invoke("get_settings");
-  setLang((settings && settings.lang) ? settings.lang : FALLBACK_LANG);
+  setLang((settings && settings.lang) ? settings.lang : LANG_AUTO);
   applyI18n();
   refreshDynamicLabels();
-  const langEl = $("about-lang"); if (langEl) langEl.textContent = langLabel(currentLang());
-  const langNote = $("about-lang-note"); if (langNote) langNote.textContent = t("about.langNote");
+  fillLangSelect();
   buildTabs();
   buildQuick();
   settingsToForm();
@@ -973,7 +1013,7 @@ async function boot() {
     const exe = $("cfg-exe").value.trim();
     if (!exe) { notify(t("ocd.needPath"), true); return; }
     $("about-openocd-path").textContent = exe;
-    const v = await showVersion(exe, $("about-openocd"), "");
+    const v = await showVersion(exe, $("about-openocd"), () => "");
     if (!v) notify(t("ocd.version.fail"), true);
   };
   $("about-open-configdir").onclick = async () => {
@@ -1023,42 +1063,54 @@ async function queryVersion() {
   await showVersion(exe, $("cfg-version-label"));
 }
 // 把某个可执行文件 --version 的首行写进指定元素；返回版本串（检测失败为空串）
-async function showVersion(exe, el, prefix = t("common.version.prefix")) {
-  el.textContent = prefix + t("common.version.checking");
+async function showVersion(exe, el, prefix = () => t("common.version.prefix")) {
+  const pf = typeof prefix === "function" ? prefix : () => String(prefix);
   let v = "";
+  const render = () => pf() + (v || t("common.version.none"));
+  dynSet(el.id, render);
+  el.textContent = pf() + t("common.version.checking");
   try { v = String((await invoke("query_version", { exe })) || "").split("\n")[0].trim(); } catch (e) { v = ""; }
-  el.textContent = prefix + (v || t("common.version.none"));
+  el.textContent = render();
   return v;
 }
 
 // ---------------------------------------------------------------- 检查更新
 let updateInfo = null;
 let aboutChecked = false;
+let upRender = null;   // 更新检查那行文案的当前渲染器，切语言时重算
 // 查 GitHub 上的最新版本：先 releases/latest，没有 Release 就退到 tags（后端用 curl/wget）
 async function checkUpdate(auto) {
   const st = $("about-update-status");
   const openBtn = $("about-open-release"), notesBtn = $("about-release-notes");
   st.style.color = "";
-  st.textContent = t("up.checking");
+  upRender = () => t("up.checking");
+  dynSet("about-update-status", () => upRender());
   openBtn.style.display = "none";
   notesBtn.style.display = "none";
   try {
     const r = await invoke("check_update");
     updateInfo = r;
-    const via = r.source === "tags" ? t("up.viaTag") : t("up.viaRelease");
-    const when = r.published_at ? t("up.published", { d: String(r.published_at).slice(0, 10) }) : "";
+    // via/when 也放进渲染器里现算，否则切语言时留着旧语言的拼接片段
+    const source = r.source, publishedAt = r.published_at;
+    const parts = () => ({
+      via: source === "tags" ? t("up.viaTag") : t("up.viaRelease"),
+      when: publishedAt ? t("up.published", { d: String(publishedAt).slice(0, 10) }) : ""
+    });
     if (r.has_update) {
-      st.textContent = t("up.new", { tag: r.tag, cur: r.current, via: via, when: when });
+      upRender = () => t("up.new", { tag: r.tag, cur: r.current, via: parts().via, when: parts().when });
+      st.textContent = upRender();
       st.style.color = "#b45309";
       notify(t("up.newNotify", { tag: r.tag, cur: r.current }));
     } else {
-      st.textContent = t("up.latest", { cur: r.current, tag: r.tag, via: via, when: when });
+      upRender = () => t("up.latest", { cur: r.current, tag: r.tag, via: parts().via, when: parts().when });
+      st.textContent = upRender();
       st.style.color = "#15803d";
     }
     if (r.url) { openBtn.dataset.url = r.url; openBtn.style.display = ""; }
     if (r.notes && String(r.notes).trim()) notesBtn.style.display = "";
   } catch (e) {
-    st.textContent = t("up.fail", { e: e });
+    upRender = () => t("up.fail", { e: e });
+    st.textContent = upRender();
     st.style.color = "#b91c1c";
     if (!auto) notify(t("up.failNotify", { e: e }), true);
   }
@@ -1153,6 +1205,8 @@ const GDB_FILTERS = [
   { name: t("filter.all"), extensions: ["*"] },
 ];
 let scriptLists = { interface: [], target: [], board: [] };
+let lastScan = null;   // 上次 scan_scripts 的结果：null / { kind: "count", i, t, b } / { kind: "failed", e }
+                       // 存数据而不是成品字符串，切换语言时才能用另一种语言重新渲染
 
 // 旧版“每行一个、按加载顺序”的有序列表 → 接口/目标两个单选字段（一次性迁移）
 function migrateLegacyConfigs() {
@@ -1195,7 +1249,7 @@ function updateCfgWarning() {
     if (!v || isAbsPath(v)) continue;
     if (list.length && list.indexOf(v) < 0) bad.push(t("cfg.warn.notInList", { label: label, v: v }));
   }
-  el.textContent = bad.length ? (bad.join("；") + t("cfg.warn.tail")) : "";
+  el.textContent = bad.length ? (bad.join(t("common.listSep")) + t("cfg.warn.tail")) : "";
   el.style.color = "#b45309";
 }
 
@@ -1221,14 +1275,31 @@ function fillCfgSelects() {
   updateCfgPreview();
 }
 
+// 扫描结果行：无扫描时用静态键文案，有结果时按当前语言重写（切语言不丢计数）
+function renderScanLabel() {
+  const el = $("cfg-scan-label");
+  if (!el) return;
+  if (!lastScan) el.textContent = t("cfg.scan.none");
+  else if (lastScan.kind === "count") el.textContent = t("cfg.scan.count", { i: lastScan.i, t: lastScan.t, b: lastScan.b });
+  else el.textContent = t("cfg.scan.failed", { e: lastScan.e });
+}
 async function rescanScripts() {
   const dir = $("cfg-scripts").value.trim();
-  if (!dir) { $("cfg-scan-label").textContent = t("cfg.scan.none"); return; }
+  if (!dir) { lastScan = null; renderScanLabel(); return; }
   try {
     scriptLists = await invoke("scan_scripts", { dir });
-  } catch (e) { $("cfg-scan-label").textContent = t("cfg.scan.failed", { e: e }); return; }
-  $("cfg-scan-label").textContent =
-    `interface ${(scriptLists.interface || []).length} · target ${(scriptLists.target || []).length} · board ${(scriptLists.board || []).length}`;
+    lastScan = {
+      kind: "count",
+      i: (scriptLists.interface || []).length,
+      t: (scriptLists.target || []).length,
+      b: (scriptLists.board || []).length,
+    };
+  } catch (e) {
+    lastScan = { kind: "failed", e: e };
+    renderScanLabel();
+    return;
+  }
+  renderScanLabel();
   fillCfgSelects();
 }
 async function reloadProfiles() {
