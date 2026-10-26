@@ -21,9 +21,9 @@ A cross-platform GUI front-end for [OpenOCD](https://openocd.org) (verified agai
 | ⬇️ **Flash** | One-click firmware programming (`program` with verify / preverify / reset / offset; non-ASCII paths encoded to the ANSI codepage), flash bank info (taller table with a name / driver / base / size / bus width / chip width legend), sector erase |
 | 🛑 **Breakpoints** | Hardware/software breakpoints and watchpoints (`bp/rbp/wp/rwp`) with list management; clickable rows, *Delete selected* acts on the selection, `#` index column, failure reason shown for any failed add/remove |
 | 🔗 **GDB** | Connection info, ready-to-copy command line, one-click external GDB launch, *Auto-detect* (scans `PATH` and the usual Arm GNU Toolchain install locations) and *Detect version*; several candidates are offered in a picker and as path-field dropdown entries |
-| ℹ️ **About** | Version info, OpenOCD version detection, config directory, and three clickable links — OpenOCD documentation / this project / P4rfa1t/OpenOCD |
+| ℹ️ **About** | Version info, OpenOCD version detection, config directory, current UI language, and three clickable links — OpenOCD documentation / this project / P4rfa1t/OpenOCD |
 
-### 🆕 New in this build (v0.3.2)
+### 🆕 New in this build (v0.3.4)
 
 - **Config** — the interface cfg and the target/board cfg slots are now type-to-search selects: type to filter, so a large scripts library is searched instantly
 - **View cfg contents** — split into two buttons, one on the interface cfg row and one on the target/board cfg row; each opens a read-only preview of that row's cfg in full (path included) instead of one shared button
@@ -39,13 +39,24 @@ A cross-platform GUI front-end for [OpenOCD](https://openocd.org) (verified agai
 - **Breakpoints / watchpoints, honest success verdict** — an add/remove is no longer judged by its TCL return value: when `breakpoint_add` fails, OpenOCD writes the reason only to its own log and still answers with an empty string, so the tool re-lists breakpoints/watchpoints after every command and compares the entry count
 - **Breakpoints / watchpoints, upfront validation** — address and length are checked before the command is sent: the length must be 1, 2 or 4, and the address must be a multiple of it (the hint prints the nearest aligned address to use)
 - **Hybrid breakpoints** — the parser now follows the `|--->linked with ContextID: 0x…` continuation line OpenOCD prints under a Hybrid breakpoint and attaches it to the entry above
-- **Version** — 0.3.2
+- **UI text table (i18n)** — every user-visible string now lives in `ui/i18n.js` (301 keys in the `zh` table): `index.html` keeps only key names (`data-i18n`, `data-i18n-placeholder`) and `app.js` calls `t("key", { … })`, so adding a language is a data change, not a code change
+- **Language persistence** — the choice is stored as `lang` in the settings file; a key missing in the active language falls back to `zh`, and a key missing everywhere renders as the key name itself, so gaps are visible at a glance
+- **Label-independent dropdowns** — the log filter and the memory width selector now switch on `<option value>` (`all|info|warn|err`, `mdw|mdh|mdb|mdd`) instead of the visible Chinese text
+- **Trimmed page descriptions** — the long paragraphs on Config (cfg load order), the log-file option, flash banks, GDB auto-detect and About were condensed to one or two lines each
+- **Flash output lands in the box** — programming and erasing no longer end with a single `(command executed)` line: `runWithLog()` notes the log-buffer position before the command and collects the delta 350 ms after it returns, so the `** Programming Started **` banner, the progress lines and `** Programming Finished **` / `** Verified OK **` all end up in the same text box; on failure the log is shown together with the error and one `Error:` line is recorded in the Log tab — and failure is judged from OpenOCD's own output too: `failLine()` walks the returned text line by line and skips `Warn` / `Info` / `Debug` / `User` lines, so a `Warn : could not read memory…` is no longer a failure — only error lines count, and the verdict quotes about 80 characters either side of the match instead of truncating the whole line to 200; the status then shows **Failed** instead of **Done** (that line goes to the Log tab as well)
+- **Flash log deduplication** — OpenOCD writes the same error both to stderr (already captured by the Log tab) and into the TCL response, so the box dedupes before displaying: the TCL response is dropped when the captured log already contains it, and the same error is no longer shown twice
+- **The OpenOCD child is cleaned up when the window closes** — closing the window used to leave the child process behind, and that leftover kept holding the debug probe (libusb) and its ports, so the next start failed with `libusb_open() failed with LIBUSB_ERROR_ACCESS` / `open failed`. One `shutdown_openocd(state, graceful)` now serves both the **Stop** button and Tauri's `ExitRequested` / `Exit` events; before starting, the TCL port is probed first — a leftover OpenOCD is asked `version` to confirm who it is, then told to `shutdown` and awaited, and if it still holds the port you get an error telling you to end `openocd.exe`
+- **Early-exit hint** — if OpenOCD dies within 4 s of being started, the backend emits an `ocd-hint` event and the Log tab explains that a previous OpenOCD is most likely still holding the debug adapter
+- **Connection state machine** — the status label is driven by backend events and runs *Stopped → Starting… → Running → (Stop) Stopping… → Stopped*; a stop you asked for no longer reads **Failed**, because the backend suppresses the failure event when the stop was intentional
+- **Language refresh keeps dynamic text** — after a language switch or re-apply, the status label and the TCL label are rewritten from JS (`i18n-applied` → `refreshDynamicLabels`), so the static `data-i18n` text no longer overwrites them
+- **Errors go to an in-page overlay** — the native `alert()` is gone: it is a system modal dialog that greys out the whole window, and while one is open you cannot even close the window. Errors now appear in the in-page overlay (`showModal`, title `common.errorTitle` — “出错了”), the status bar shows the same line, and the window stays closable at any time
+- **Version** — 0.3.4
 
 ## 🚀 Getting Started
 
 ### Option 1 — Download a prebuilt binary
 
-Every push to `main` produces the files below as build [artifacts](https://github.com/P4rfa1t/OpenOCD-GUI/actions/workflows/build.yml) (downloading them needs a GitHub login); pushing a `v*` tag publishes the very same files as a [Release](https://github.com/P4rfa1t/OpenOCD-GUI/releases) — a Release appears only when all three platform builds succeed. **v0.3.2** ships these:
+Every push to `main` produces the files below as build [artifacts](https://github.com/P4rfa1t/OpenOCD-GUI/actions/workflows/build.yml) (downloading them needs a GitHub login); pushing a `v*` tag publishes the very same files as a [Release](https://github.com/P4rfa1t/OpenOCD-GUI/releases) — a Release appears only when all three platform builds succeed. **v0.3.4** ships these:
 
 | Artifact | Contents | How to run |
 |---|---|---|
@@ -57,7 +68,7 @@ Every push to `main` produces the files below as build [artifacts](https://githu
 
 On the Releases page the two bare binaries are renamed to `OpenOCD-GUI-linux-x86_64` and `OpenOCD-GUI-macos-aarch64` so that they cannot collide (`openocd-gui.exe` and both tarballs keep their names); they are extensionless executables, not archives.
 
-- **Windows** — only the WebView2 Runtime is needed; it is preinstalled on Windows 10/11 (older systems: [Evergreen installer](https://developer.microsoft.com/microsoft-edge/webview2/)). The release is built with the **MSVC** toolchain, which links `WebView2Loader` statically into the exe; the 0.2.0-era mingw builds needed a separate DLL beside it and are superseded — the [Releases](https://github.com/P4rfa1t/OpenOCD-GUI/releases) page still carries that 0.2.0 zip, which v0.3.2 does not need.
+- **Windows** — only the WebView2 Runtime is needed; it is preinstalled on Windows 10/11 (older systems: [Evergreen installer](https://developer.microsoft.com/microsoft-edge/webview2/)). The release is built with the **MSVC** toolchain, which links `WebView2Loader` statically into the exe; the 0.2.0-era mingw builds needed a separate DLL beside it and are superseded — the [Releases](https://github.com/P4rfa1t/OpenOCD-GUI/releases) page still carries that 0.2.0 zip, which v0.3.4 does not need.
 - **Linux** — the two files in the x86_64 artifact are the same binary on purpose, and both work: the artifact zip we produced does record `100755` (`-rwxr-xr-x`) — measured on the downloaded artifact — but GitHub does not guarantee artifact permissions (the Actions docs say every file comes back as `644`), so the tarball is the one to trust: unpack and run. If the raw file lost the bit (a path through Windows, a re-pack after a browser download), `chmod +x` fixes it. Either way you need the WebKitGTK 4.1 runtime (`libwebkit2gtk-4.1-0`, `libgtk-3-0`; Ubuntu 22.04+), OpenOCD ≥ 0.12 and an X11/Wayland session. `.deb` / `.AppImage` are best-effort: if the bundling step fails, that artifact comes out empty.
 - **macOS** — the bare binary is a Mach-O executable, which carries **no file extension** by design: that is expected, not a truncated download. It is not a `.app` either, so it does not double-click — start it from a terminal (`./openocd-gui`). Anything downloaded by a browser gets the quarantine attribute and Gatekeeper blocks it: clear it with `xattr -d com.apple.quarantine ./openocd-gui`, or allow it under System Settings → Privacy & Security. CI applies an ad-hoc signature (`codesign --sign -`), but there is no Apple developer certificate and no notarization, so the first launch may still be blocked.
 
@@ -103,7 +114,8 @@ cargo build --release
 2. Toolbar **▶ 启动** → OpenOCD launches, the GUI auto-connects to its TCL RPC port (default 6666)
 3. Use **Target / Registers / Memory / Breakpoints** tabs to control the target; **Flash** to program firmware
 4. **GDB** tab gives you a ready-made command line (`target remote localhost:3333`) for an external GDB
-5. **■ 停止** sends a graceful `shutdown` to OpenOCD (falls back to terminate)
+5. **■ 停止** sends a graceful `shutdown` to OpenOCD (falls back to terminate); closing the window runs the same cleanup, so no orphaned OpenOCD keeps the probe busy
+6. **Frontend startup check (developers)** — a startup-time JS exception is invisible to grep and to static checks, so run the release exe with WebView2 remote debugging enabled: `$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9338'` (add `$env:OPENOCD_GUI_AUTOSTART='1'` to have it start the server by itself), then `curl http://127.0.0.1:9338/json` for the `webSocketDebuggerUrl` and evaluate over the DevTools protocol — `Runtime.evaluate` with `(async()=>{try{await boot();return 'BOOT_OK'}catch(e){return 'BOOT_ERR: '+e.message}})()`
 
 ## 🧱 Architecture
 
@@ -114,7 +126,8 @@ OpenOCD-GUI/
 │                         #   ANSI path encoding), supervision/polling threads,
 │                         #   settings & profiles (~/.openocd_gui, JSON)
 └── ui/                   # web frontend (vanilla HTML/CSS/JS, no node build)
-    ├── index.html        #   layout + styling
+    ├── index.html        #   layout + styling (i18n key names only)
+    ├── i18n.js           #   UI text table (zh — more languages can be added)
     └── app.js            #   tab logic, OpenOCD output parsers, IPC
 ```
 
@@ -124,6 +137,16 @@ The GUI talks to OpenOCD through exactly two channels: the **stdout** of the spa
 
 - `OPENOCD_GUI_AUTOSTART=1` env var → the app presses **Start** by itself at launch (E2E testing)
 - `%TEMP%/ocd_gui_tauri.log` — backend/frontend diagnostic trace
+
+### Adding a language
+
+Every user-visible string lives in `ui/i18n.js`; `zh` is the reference table (301 keys) and the fallback. To add one:
+
+1. Add a table to `I18N` with exactly the same keys as `zh` — anything you leave out falls back to `zh`, and a key missing from both shows up as the raw key name
+2. Add `{ code: "xx", label: "…" }` to `LANGS`; the label is what the About page displays
+3. Set `lang` to that code in `~/.openocd_gui/settings.json` (`%USERPROFILE%\.openocd_gui\settings.json` on Windows) — the About page has an *Open directory* button to get there, and the app writes this field back on every save
+
+`t("key", { name: value })` does `{name}` interpolation. The frontend ships as plain files inside the binary, so restart (or rebuild) the app after editing the table.
 
 ## 🗺️ Roadmap
 

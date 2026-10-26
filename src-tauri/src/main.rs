@@ -4,7 +4,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -40,6 +40,13 @@ struct Settings {
     auto_refresh_regs: bool,
     #[serde(default)]
     window_geometry: String,
+    /// 界面语言（zh / en…）：决定前端用 I18N 里哪张文案表
+    #[serde(default = "default_lang")]
+    lang: String,
+}
+
+fn default_lang() -> String {
+    "zh".into()
 }
 
 // Linux 上 GDB 常带版本后缀（gdb-multiarch / arm-none-eabi-gdb）
@@ -71,6 +78,7 @@ impl Settings {
             auto_poll: true,
             poll_interval_ms: 1000,
             auto_refresh_regs: true,
+            lang: default_lang(),
             ..Default::default()
         }
     }
@@ -102,6 +110,8 @@ struct AppState {
     settings: Mutex<Settings>,
     poll_enabled: AtomicBool,
     server_running: AtomicBool,
+    stopping: AtomicBool,
+    epoch: AtomicU64,
 }
 
 // ---------------------------------------------------------------- tcl rpc
@@ -283,6 +293,7 @@ fn spawn_openocd(args: &[String]) -> Result<Child, String> {
 
 fn supervise(app: AppHandle, state: &AppState, settings: Settings) {
     state.server_running.store(true, Ordering::SeqCst);
+    state.stopping.store(false, Ordering::SeqCst);
     state
         .poll_enabled
         .store(settings.auto_poll, Ordering::SeqCst);
@@ -302,6 +313,7 @@ fn supervise(app: AppHandle, state: &AppState, settings: Settings) {
                 let _ = stream.set_nodelay(true);
                 *state.tcl.lock().unwrap() = Some(stream);
                 let _ = app.emit("tcl-state", true);
+                let _ = app.emit("server-state", "running");
                 poll_loop(&app, state, &settings);
                 *state.tcl.lock().unwrap() = None;
             }
@@ -385,6 +397,31 @@ fn start_server(app: AppHandle, state: State<'_, AppState>, settings: Settings) 
     if state.server_running.load(Ordering::SeqCst) {
         return Err("OpenOCD 已在运行".into());
     }
+    // 上次直接关窗口可能留下一个还占着调试器的 openocd：先请它退出，再启动新的。
+    if state.child.lock().unwrap().is_none() && tcl_port_open(settings.tcl_port) {
+        dbglog("stale OpenOCD on tcl port; asking it to shut down");
+        let _ = app.emit(
+            "log",
+            format!(
+                "Warn : TCL 端口 {} 上还有残留的 OpenOCD（多半是上次直接关闭窗口留下的），正在请它退出…",
+                settings.tcl_port
+            ),
+        );
+        if clear_stale_openocd(settings.tcl_port) {
+            for _ in 0..12 {
+                if !tcl_port_open(settings.tcl_port) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        }
+        if tcl_port_open(settings.tcl_port) {
+            return Err(format!(
+                "E_STALE_TCL|{}|还有残留的 openocd.exe 占着 TCL 端口（它也占着调试器，所以新实例会报 libusb_open() failed / open failed）。请在任务管理器里结束 openocd.exe 后重试。",
+                settings.tcl_port
+            ));
+        }
+    }
     let args = build_command(&settings)?;
     dbglog(&format!("argv: {:?}", args));
     let mut child = spawn_openocd(&args)?;
@@ -420,7 +457,11 @@ fn start_server(app: AppHandle, state: State<'_, AppState>, settings: Settings) 
     *state.settings.lock().unwrap() = settings.clone();
 
     // watcher thread: report exit
+    // 代际号：只有「本代 supervise 还没被新的 start 取代」时才允许报异常退出，
+    // 避免「停止后立刻重新连接」时旧 watcher 误报 failed（stopping 是共享标志，会被新 supervise 清掉）
+    let my_epoch = state.epoch.fetch_add(1, Ordering::SeqCst) + 1;
     let app3 = app.clone();
+    let started = std::time::Instant::now();
     std::thread::spawn(move || {
         let st = app3.state::<AppState>();
         loop {
@@ -430,6 +471,11 @@ fn start_server(app: AppHandle, state: State<'_, AppState>, settings: Settings) 
                 match child.try_wait() {
                     Ok(Some(_status)) => {
                         *guard = None;
+                        drop(guard);
+                        // 刚起来就死：多半是调试器被上一个 openocd 占着（LIBUSB_ERROR_ACCESS）
+                        if started.elapsed() < Duration::from_secs(4) {
+                            let _ = app3.emit("ocd-hint", "hint.accessFail");
+                        }
                         break;
                     }
                     Ok(None) => {}
@@ -441,7 +487,11 @@ fn start_server(app: AppHandle, state: State<'_, AppState>, settings: Settings) 
         }
         st.server_running.store(false, Ordering::SeqCst);
         *st.tcl.lock().unwrap() = None;
-        let _ = app3.emit("server-state", "failed");
+        // 主动「停止」时不要报「异常退出」：停止流程自己会发 stopped；
+        // 已被新一代 start 取代的旧 watcher 也不再报（代际号不符）
+        if !st.stopping.load(Ordering::SeqCst) && st.epoch.load(Ordering::SeqCst) == my_epoch {
+            let _ = app3.emit("server-state", "failed");
+        }
     });
 
     // supervisor thread
@@ -453,20 +503,65 @@ fn start_server(app: AppHandle, state: State<'_, AppState>, settings: Settings) 
     Ok(())
 }
 
-#[tauri::command]
-fn stop_server(state: State<'_, AppState>) -> Result<(), String> {
+/// 结束 OpenOCD 子进程。graceful = 先发 TCL shutdown 让它自己收尾（慢一点但干净）。
+/// 「停止」按钮与窗口关闭（RunEvent::ExitRequested / Exit）都走这里：窗口直接关掉时若
+/// 不带走子进程，残留的 openocd 会一直占着调试器（libusb）和端口，下次连接就会报
+/// `libusb_open() failed with LIBUSB_ERROR_ACCESS` / `open failed`。
+fn shutdown_openocd(state: &AppState, graceful: bool) {
     state.server_running.store(false, Ordering::SeqCst);
-    let _ = tcl_call(state.inner(), "shutdown", Duration::from_secs(2));
-    std::thread::sleep(Duration::from_millis(600));
+    if graceful {
+        let _ = tcl_call(state, "shutdown", Duration::from_millis(1200));
+        std::thread::sleep(Duration::from_millis(400));
+    }
     let mut guard = state.child.lock().unwrap();
     if let Some(mut child) = guard.take() {
         match child.try_wait() {
             Ok(Some(_)) => {}
             _ => {
                 let _ = child.kill();
+                let _ = child.wait();
             }
         }
     }
+}
+
+/// 该端口上是否已经有人在听（用来识别上次直接关窗口留下的 OpenOCD）。
+fn tcl_port_open(port: i64) -> bool {
+    let addr = format!("127.0.0.1:{}", port);
+    match addr.to_socket_addrs().ok().and_then(|mut it| it.next()) {
+        Some(a) => TcpStream::connect_timeout(&a, Duration::from_millis(400)).is_ok(),
+        None => false,
+    }
+}
+
+/// 端口上如果真是残留的 OpenOCD（先用 version 探一下，确认是 OpenOCD 再动手），
+/// 就请它 shutdown。返回是否确认并发出过 shutdown。
+fn clear_stale_openocd(port: i64) -> bool {
+    let addr = format!("127.0.0.1:{}", port);
+    let a = match addr.to_socket_addrs().ok().and_then(|mut it| it.next()) {
+        Some(a) => a,
+        None => return false,
+    };
+    let mut stream = match TcpStream::connect_timeout(&a, Duration::from_millis(500)) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let probe = tcl_call_raw(&mut stream, "version", Duration::from_millis(900)).unwrap_or_default();
+    let low = probe.to_lowercase();
+    if !low.contains("openocd") && !low.contains("open on-chip debugger") {
+        return false;
+    }
+    let _ = tcl_call_raw(&mut stream, "shutdown", Duration::from_millis(900));
+    true
+}
+
+#[tauri::command]
+fn stop_server(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let st = state.inner();
+    st.stopping.store(true, Ordering::SeqCst);
+    let _ = app.emit("server-state", "stopping");
+    shutdown_openocd(st, true);
+    let _ = app.emit("server-state", "stopped");
     Ok(())
 }
 
@@ -1197,7 +1292,7 @@ fn main() {
         return;
     }
     let settings = load_settings_or_default();
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
@@ -1207,6 +1302,8 @@ fn main() {
                 settings: Mutex::new(settings.clone()),
                 poll_enabled: AtomicBool::new(settings.auto_poll),
                 server_running: AtomicBool::new(false),
+            stopping: AtomicBool::new(false),
+            epoch: AtomicU64::new(0),
             });
             Ok(())
         })
@@ -1238,6 +1335,14 @@ fn main() {
             open_path,
             check_update,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+    app.run(|handle, event| match event {
+        // 关窗口 / 退出时一定要带走 openocd 子进程，否则它继续占着调试器与端口。
+        tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+            let st = handle.state::<AppState>();
+            shutdown_openocd(st.inner(), false);
+        }
+        _ => {}
+    });
 }

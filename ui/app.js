@@ -135,7 +135,9 @@ async function tclExec(cmd, timeoutMs = 15000) { return invoke("tcl_exec", { cmd
 function notify(msg, isErr = false) {
   $("status-msg").textContent = msg;
   $("status-msg").style.color = isErr ? "#dc2626" : "#2563eb";
-  if (isErr) alert(msg);
+  // 错误提示用页内浮层而不是原生 alert：原生 alert 是模态对话框，会把主窗口置灰、
+  // 弹窗没关掉时连窗口都关不了；页内浮层不阻塞、可复制、可叠加关闭。
+  if (isErr) showModal(t("common.errorTitle"), String(msg));
 }
 function fillTable(tbodyId, rows, cols, onDbl) {
   const tb = document.querySelector(`#${tbodyId} tbody`) || $(tbodyId);
@@ -154,10 +156,10 @@ function fillTable(tbodyId, rows, cols, onDbl) {
 
 // ---------------------------------------------------------------- tabs
 const TABS = [
-  ["config", "配置", false], ["log", "日志", false], ["console", "控制台", true],
-  ["target", "目标", true], ["regs", "寄存器", true], ["mem", "内存", true],
-  ["flash", "烧写", true], ["bp", "断点/观察点", true], ["gdb", "GDB", false],
-  ["about", "关于", false],
+  ["config", t("tab.config"), false], ["log", t("tab.log"), false], ["console", t("tab.console"), true],
+  ["target", t("tab.target"), true], ["regs", t("tab.regs"), true], ["mem", t("tab.mem"), true],
+  ["flash", t("tab.flash"), true], ["bp", t("tab.bp"), true], ["gdb", t("tab.gdb"), false],
+  ["about", t("tab.about"), false],
 ];
 function buildTabs() {
   const box = $("tabs");
@@ -176,7 +178,7 @@ function selectTab(id) {
     el.classList.toggle("active", el.dataset.page === id));
   document.querySelectorAll(".page").forEach(p =>
     p.classList.toggle("active", p.id === "page-" + id));
-  if (id === "regs" && $("tcl-label").textContent.includes("已连接") &&
+  if (id === "regs" && $("tcl-label").textContent.includes(t("tb.tcl.on")) &&
       !regRows.length && !regPending) refreshRegs();
   // 首次打开「关于」页时自动查一次 GitHub 上的最新版本（失败只写行内提示，不弹窗）
   if (id === "about" && !aboutChecked) { aboutChecked = true; checkUpdate(true); }
@@ -200,6 +202,7 @@ function setConnTabs(enabled) {
 
 // ---------------------------------------------------------------- settings <-> form
 function formToSettings() {
+  settings.lang = currentLang();
   settings.openocd_path = $("cfg-exe").value.trim();
   settings.scripts_dir = $("cfg-scripts").value.trim();
   const ifcSel = $("cfg-interface"), tgtSel = $("cfg-target");
@@ -241,19 +244,28 @@ function settingsToForm() {
 }
 function updateGdbPreview() {
   $("gdb-preview").textContent = `${$("gdb-path").value} ${$("gdb-args").value}`;
-  $("gdb-info").textContent = `连接地址: localhost:${settings?.gdb_port ?? 3333}  (target remote localhost:${settings?.gdb_port ?? 3333})`;
+  const gp = settings?.gdb_port ?? 3333;
+  $("gdb-info").textContent = t("gdb.info", { port: gp });
   $("sb-ports").textContent = `GDB ${settings?.gdb_port} · TCL ${settings?.tcl_port} · Telnet ${settings?.telnet_port}`;
 }
 
 // ---------------------------------------------------------------- server control
-const STATE_LABELS = { stopped: ["已停止", "#9ca3af"], starting: ["启动中…", "#f59e0b"],
-  running: ["运行中", "#10b981"], stopping: ["停止中…", "#f59e0b"], failed: ["异常退出", "#ef4444"] };
+// 状态文案按当前语言现取（不在模块初始化时就固定）；并记住状态与 TCL 连接，
+// 语言重刷（applyI18n）之后再由 refreshDynamicLabels 写回，避免被 data-i18n 的静态文案覆盖。
+const STATE_COLORS = { stopped: "#9ca3af", starting: "#f59e0b", running: "#10b981", stopping: "#f59e0b", failed: "#ef4444" };
+const STATE_KEYS = ["stopped", "starting", "running", "stopping", "failed"];
+let serverState = "stopped", tclOn = false;
 function setServerState(state) {
-  const [label, color] = STATE_LABELS[state] || [state, "#9ca3af"];
-  $("state-label").textContent = label;
-  $("state-dot").style.background = color;
+  serverState = state;
+  $("state-label").textContent = STATE_KEYS.indexOf(state) >= 0 ? t("state." + state) : String(state);
+  $("state-dot").style.background = STATE_COLORS[state] || "#9ca3af";
   $("btn-start").disabled = !(state === "stopped" || state === "failed");
   $("btn-stop").disabled = !(state === "starting" || state === "running");
+}
+// 语言切换/重刷后把 JS 负责的动态文案按新语言重写一遍
+function refreshDynamicLabels() {
+  setServerState(serverState);
+  $("tcl-label").textContent = tclOn ? t("tb.tcl.on") : t("tb.tcl.off");
 }
 async function startServer() {
   formToSettings();
@@ -264,7 +276,13 @@ async function startServer() {
     invoke("log_msg", { msg: "startServer: ok" });
   } catch (e) {
     invoke("log_msg", { msg: "startServer err: " + e });
-    notify(String(e), true);
+    const s = String(e);
+    // 后端用 E_STALE_TCL|<port>| 前缀报告「端口上还有残留 OpenOCD」
+    if (s.startsWith("E_STALE_TCL|")) {
+      notify(t("hint.stalePort", { port: s.split("|")[1] || "?" }), true);
+    } else {
+      notify(s, true);
+    }
   }
 }
 async function stopServer() { try { await invoke("stop_server"); } catch (e) { notify(String(e), true); } }
@@ -291,8 +309,8 @@ function appendLogDiv(level, line) {
 }
 function logPassesFilter(level) {
   const f = $("log-filter").value;
-  const sets = { "全部": null, "信息及以上": ["info", "user", "warning", "error", "raw"],
-    "警告+错误": ["warning", "error", "raw"], "仅错误": ["error", "raw"] };
+  const sets = { "all": null, "info": ["info", "user", "warning", "error", "raw"],
+    "warn": ["warning", "error", "raw"], "err": ["error", "raw"] };
   const allow = sets[f];
   return allow === null || allow.includes(level);
 }
@@ -321,11 +339,11 @@ async function sendConsole(cmd) {
   try {
     const res = await tclExec(cmd, 60000);
     const r = document.createElement("div");
-    r.textContent = res || "(无输出)";
+    r.textContent = res || t("common.none");
     div.appendChild(r);
   } catch (e) {
     const r = document.createElement("div");
-    r.className = "err"; r.textContent = "错误: " + e;
+    r.className = "err"; r.textContent = t("common.err", { e: e });
     div.appendChild(r);
   }
   div.scrollTop = div.scrollHeight;
@@ -342,13 +360,13 @@ function onTargets(text) {
   const cur = targetRows.find(r => r.current) || targetRows[0];
   if (cur) {
     lastTargetState = cur.state;
-    $("target-label").textContent = "目标: " + cur.state;
+    $("target-label").textContent = t("tb.target", { v: cur.state });
   }
 }
 async function targetAction(cmd) {
   const cur = targetRows.find(r => r.current) || targetRows[0];
-  if (!cur) { notify("没有可操作的目标", true); return; }
-  try { await tclExec(cmd, 30000); } catch (e) { notify("命令失败: " + e, true); }
+  if (!cur) { notify(t("tg.none"), true); return; }
+  try { await tclExec(cmd, 30000); } catch (e) { notify(t("common.cmdFail", { e: e }), true); }
   refreshTargetsOnce();
 }
 
@@ -356,20 +374,20 @@ async function targetAction(cmd) {
 async function refreshRegs() {
   if (regPending) return;
   regPending = true;
-  $("reg-status").textContent = "读取中…";
+  $("reg-status").textContent = t("reg.reading");
   try {
     const text = await tclExec("reg", 20000);
     const { regs, err } = parseRegs(text);
     regRows = regs;
     if (regs.length) {
-      $("reg-status").textContent = `${regs.length} 个寄存器`;
+      $("reg-status").textContent = t("reg.count", { n: regs.length });
     } else {
       // 解析不出任何寄存器时把原始输出打到日志页，便于定位格式差异
-      $("reg-status").textContent = err || "未解析到寄存器";
+      $("reg-status").textContent = err || t("reg.unparsed");
       appendLog("$ reg\n" + text);
     }
     renderRegs();
-  } catch (e) { $("reg-status").textContent = "读取失败: " + e; }
+  } catch (e) { $("reg-status").textContent = t("reg.readFail", { e: e }); }
   regPending = false;
 }
 function renderRegs() {
@@ -380,38 +398,38 @@ function renderRegs() {
      r => r.value ? padHex(r.value, r.size) : "—", r => r.dirty ? "dirty" : ""],
     (r) => {
       const cur = r.value ? padHex(r.value, r.size) : "0x0";
-      const nv = prompt(`新值（十六进制）— ${r.name}:`, cur);
+      const nv = prompt(t("reg.prompt", { name: r.name }), cur);
       if (nv === null) return;
       const v = parseHex(nv);
-      if (v === null) { notify("请输入十六进制数值", true); return; }
+      if (v === null) { notify(t("reg.needHex"), true); return; }
       tclExec(`reg ${r.name} 0x${v.toString(16)}`).then(refreshRegs)
-        .catch(e => notify("写入寄存器失败: " + e, true));
+        .catch(e => notify(t("reg.writeFail", { e: e }), true));
     });
 }
 
 // ---------------------------------------------------------------- memory
-const MEM_WIDTHS = { "32 位 (mdw)": [4, "mdw", "mww"], "16 位 (mdh)": [2, "mdh", "mwh"],
-  "8 位 (mdb)": [1, "mdb", "mwb"], "64 位 (mdd)": [8, "mdd", "mwd"] };
+const MEM_WIDTHS = { "mdw": [4, "mdw", "mww"], "mdh": [2, "mdh", "mwh"],
+  "mdb": [1, "mdb", "mwb"], "mdd": [8, "mdd", "mwd"] };
 async function readMem(addr) {
   if (addr === undefined) {
     addr = parseHex($("mem-addr").value);
-    if (addr === null) { notify("地址格式无效", true); return; }
+    if (addr === null) { notify(t("mem.badAddr"), true); return; }
   }
   const [size, rcmd] = MEM_WIDTHS[$("mem-width").value];
   memSize = size; memAddr = addr;
   const count = parseInt($("mem-count").value) || 160;
-  $("mem-status").textContent = "读取中…";
+  $("mem-status").textContent = t("mem.reading");
   try {
     const text = await tclExec(`${rcmd} 0x${addr.toString(16)} ${count}`, 20000);
     memRows = parseMd(text);
     $("mem-status").textContent = memRows.length ?
-      memRows.reduce((n, [, v]) => n + v.length, 0) + " 项" : "读取失败或无数据";
+      t("mem.items", { n: memRows.reduce((n, [, v]) => n + v.length, 0) }) : t("mem.noData");
     renderMem();
-  } catch (e) { $("mem-status").textContent = "读取失败: " + e; }
+  } catch (e) { $("mem-status").textContent = t("mem.readFail", { e: e }); }
 }
 function renderMem() {
   const perLine = 32 / memSize;
-  let html = "<thead><tr><th>地址</th>";
+  let html = "<thead><tr><th>" + t("th.addr") + "</th>";
   for (let i = 0; i < perLine; i++) html += `<th>${(i * memSize).toString(16).toUpperCase()}</th>`;
   html += "<th>ASCII</th></tr></thead><tbody>";
   memRows.forEach(([addr, vals], r) => {
@@ -433,17 +451,17 @@ function renderMem() {
       if (i >= vals.length) return;
       const cellAddr = rowAddr + i * memSize;
       const [, , wcmd] = MEM_WIDTHS[$("mem-width").value];
-      const nv = prompt(`新值（十六进制）— 地址 0x${cellAddr.toString(16).toUpperCase()}:`,
+      const nv = prompt(t("mem.prompt", { addr: cellAddr.toString(16).toUpperCase() }),
         "0x" + vals[i].toString(16).toUpperCase().padStart(memSize * 2, "0"));
       if (nv === null) return;
       const v = parseHex(nv);
       const lim = 2 ** (memSize * 8);   // 不能用 1 << (memSize*8)：JS 位移按 mod 32 取模，32/64 位会恒为 1
       if (v === null || v < 0 || v >= lim) {
-        notify("数值无效或超出宽度（上限 " + lim + "，即 0x" + "f".repeat(memSize * 2) + "）", true);
+        notify(t("mem.outOfRange", { max: lim, hex: "f".repeat(memSize * 2) }), true);
         return;
       }
       tclExec(`${wcmd} 0x${cellAddr.toString(16)} 0x${v.toString(16)}`)
-        .then(() => readMem(memAddr)).catch(e => notify("写入内存失败: " + e, true));
+        .then(() => readMem(memAddr)).catch(e => notify(t("mem.writeFail", { e: e }), true));
     };
   });
 }
@@ -455,23 +473,71 @@ function memPage(dir) {
 }
 
 // ---------------------------------------------------------------- flash
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 跑一条 OpenOCD 操作，并把期间 OpenOCD 打到 stdout/stderr 的日志一起收回来
+// （烧写 / 擦除的进度、** Programming Finished **、Verified OK 都在那里）。
+async function runWithLog(fn, drainMs) {
+  const from = logLines.length;   // 日志页同一个缓冲：先记位置，回来再取增量
+  let res = "", err = null;
+  try { res = await fn(); } catch (e) { err = e; }
+  await sleepMs(drainMs || 350);  // 等管道里最后几行流过来
+  const log = logLines.slice(from).map(([, l]) => l).join("\n").trim();
+  return { res: String(res || "").trim(), log, err };
+}
+// OpenOCD 常在 TCL 结果里回一段错误文本而不是失败状态，这里挑出第一行错误作为失败依据
+function failLine(text) {
+  for (const raw of String(text || "").split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    // 只认错误行：日志级别是 Warn/Info/Debug 的行即使含 could not / Unable to 也不算失败
+    // 带日志级别前缀的行只当噪声：除非这行本身写了 Error，否则 Warn/Info/Debug/User 不算失败
+    const lvl = line.match(/^(Warn|Info|Debug|User)\s*:/i);
+    if (lvl && !/\bError\b/i.test(line)) continue;
+    const m = line.match(/.{0,80}\b(Error\b|Unable to|could not|failed to).{0,80}/i);
+    if (m) return m[0].trim();
+  }
+  return "";
+}
+// OpenOCD 会把同一条错误既写进 stderr（日志页已收）又当作 TCL 响应文本回一份，展示前去重
+function flashParts(r) {
+  const log = String(r.log || "");
+  const res = String(r.res || "").trim();
+  const parts = [];
+  if (log) parts.push(log);
+  // res 与 log 可能部分重叠（同一条错误 + 附加一行），也可能是反向包含：逐行去掉 log 里已有的行
+  if (res && log.indexOf(res) < 0) {
+    const have = new Set(log.split("\n").map((s) => s.trim()));
+    const extra = res.split("\n").filter((l) => l.trim() && !have.has(l.trim()));
+    if (extra.length) parts.push(extra.join("\n"));
+  }
+  return parts;
+}
+function showFlashOut(parts) {
+  const text = parts.filter(Boolean).join("\n");
+  $("flash-out").textContent = text || t("fl.executed");
+  $("flash-out").scrollTop = 0;
+}
+
 async function programFirmware() {
   const path = $("fl-file").value.trim();
-  if (!path) { notify("请先选择固件镜像文件", true); return; }
+  if (!path) { notify(t("fl.needFile"), true); return; }
   $("fl-program").disabled = true;
-  $("fl-status").textContent = "执行中…";
-  $("flash-out").textContent = "";
-  try {
-    const res = await invoke("program_firmware", {
-      path, offset: $("fl-offset").value.trim(),
-      preverify: $("fl-preverify").checked, verify: $("fl-verify").checked,
-      reset: $("fl-reset").checked });
-    $("fl-status").textContent = "完成";
-    $("flash-out").textContent = res || "(命令已执行)";
+  $("fl-status").textContent = t("fl.running");
+  $("flash-out").textContent = t("fl.programStarted");
+  const r = await runWithLog(() => invoke("program_firmware", {
+    path, offset: $("fl-offset").value.trim(),
+    preverify: $("fl-preverify").checked, verify: $("fl-verify").checked,
+    reset: $("fl-reset").checked }));
+  showFlashOut(flashParts(r));
+  const fb = r.err ? null : failLine(r.res + "\n" + r.log);
+  if (r.err || fb) {
+    $("fl-status").textContent = t("fl.failed");
+    notify(t("fl.programFail", { e: r.err || fb }), true);
+    appendLog("Error: " + (r.err || fb));
+  } else {
+    $("fl-status").textContent = t("fl.done");
     refreshTargetsOnce();
-  } catch (e) {
-    $("fl-status").textContent = "失败";
-    notify("烧写失败: " + e, true);
   }
   $("fl-program").disabled = false;
 }
@@ -481,20 +547,21 @@ async function refreshBanks() {
     const banks = parseBanks(text);
     fillTable("fl-table", banks, [b => b.num, b => b.name, b => b.driver, b => b.base,
       b => b.size, b => b.bus, b => b.chip]);
-    if (!banks.length) $("flash-out").textContent = text || "(无 flash bank)";
-  } catch (e) { $("flash-out").textContent = "flash banks 失败: " + e; }
+    if (!banks.length) $("flash-out").textContent = text || t("fl.noBanks");
+  } catch (e) { $("flash-out").textContent = t("fl.banksFail", { e: e }); }
 }
 async function flashInfo() {
-  try { $("flash-out").textContent = await tclExec(`flash info ${$("fl-bank-num").value || "0"}`, 30000) || "(无输出)"; }
-  catch (e) { $("flash-out").textContent = "flash info 失败: " + e; }
+  try { $("flash-out").textContent = await tclExec(`flash info ${$("fl-bank-num").value || "0"}`, 30000) || t("common.none"); }
+  catch (e) { $("flash-out").textContent = t("fl.infoFail", { e: e }); }
 }
 async function eraseSectors() {
   const cmd = `flash erase_sector ${$("fl-bank-num").value || "0"} ${$("fl-first").value || "0"} ${$("fl-last").value || "last"}`;
-  try {
-    await tclExec(cmd, 120000);
-    $("flash-out").textContent = "扇区擦除完成";
-    flashInfo();
-  } catch (e) { notify("擦除失败: " + e, true); }
+  const r = await runWithLog(() => tclExec(cmd, 120000));
+  const fb = r.err ? null : failLine(r.res + "\n" + r.log);
+  if (r.err || fb) { $("fl-status").textContent = t("fl.failed"); notify(t("fl.eraseFail", { e: r.err || fb }), true); return; }
+  showFlashOut(flashParts(r));
+  appendLog(t("fl.eraseDone"));
+  flashInfo();
 }
 
 // ---------------------------------------------------------------- breakpoints
@@ -504,13 +571,13 @@ function renderBpTable() {
   const tb = document.querySelector("#bp-table tbody");
   tb.innerHTML = "";
   const cnt = $("bp-count");
-  if (cnt) cnt.textContent = bpRows.length ? "共 " + bpRows.length + " 个断点" : "";
+  if (cnt) cnt.textContent = bpRows.length ? t("bp.count", { n: bpRows.length }) : "";
   if (!bpRows.length) {
     // 空表很容易被误读成“功能坏了”，放一行占位说明
     const tr = document.createElement("tr");
     const td = document.createElement("td");
     td.colSpan = 5; td.className = "muted";
-    td.textContent = "（当前没有断点：填好地址后点「添加断点」，或点「刷新」重新读取）";
+    td.textContent = t("bp.empty");
     tr.appendChild(td); tb.appendChild(tr);
     return;
   }
@@ -530,12 +597,12 @@ function renderWpTable() {
   const tb = document.querySelector("#wp-table tbody");
   tb.innerHTML = "";
   const cnt = $("wp-count");
-  if (cnt) cnt.textContent = wpRows.length ? "共 " + wpRows.length + " 个观察点" : "";
+  if (cnt) cnt.textContent = wpRows.length ? t("wp.count", { n: wpRows.length }) : "";
   if (!wpRows.length) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
     td.colSpan = 6; td.className = "muted";
-    td.textContent = "（当前没有观察点：填好地址后点「添加观察点」，或点「刷新」重新读取）";
+    td.textContent = t("wp.empty");
     tr.appendChild(td); tb.appendChild(tr);
     return;
   }
@@ -554,22 +621,22 @@ async function refreshBp() {
   try {
     const bpText = String(await tclExec("bp") || "");
     bpRows = parseBp(bpText);
-    if (bpText.trim() && !bpRows.length) appendLog("断点列表解析不出一行，OpenOCD 原文：" + bpText.trim());
-  } catch (e) { bpRows = []; bpRefreshErr = String(e); appendLog("读取断点列表失败：" + e); }
+    if (bpText.trim() && !bpRows.length) appendLog(t("bp.parseFailLog", { t: bpText.trim() }));
+  } catch (e) { bpRows = []; bpRefreshErr = String(e); appendLog(t("bp.readFailLog", { e: e })); }
   try {
     const wpText = String(await tclExec("wp") || "");
     wpRows = parseWp(wpText);
-    if (wpText.trim() && !wpRows.length) appendLog("观察点列表解析不出一行，OpenOCD 原文：" + wpText.trim());
-  } catch (e) { wpRows = []; wpRefreshErr = String(e); appendLog("读取观察点列表失败：" + e); }
+    if (wpText.trim() && !wpRows.length) appendLog(t("wp.parseFailLog", { t: wpText.trim() }));
+  } catch (e) { wpRows = []; wpRefreshErr = String(e); appendLog(t("wp.readFailLog", { e: e })); }
   const bh = $("bp-hint"), wh = $("wp-hint");
   // 刷新成功时只清掉“本函数自己写的那条”失败文案，不覆盖 bpCmd 留下的执行结果
   const ownHint = (el, marker, err, label) => {
     if (!el) return;
-    if (err) { el.textContent = label + "：" + err + "（请确认 OpenOCD 正在运行、已连接）"; el.style.color = "#dc2626"; }
+    if (err) { el.textContent = t("x.hint.suffix", { label: label, err: err }); el.style.color = "#dc2626"; }
     else if (el.textContent.indexOf(marker) === 0) { el.textContent = ""; el.style.color = ""; }
   };
-  ownHint(bh, "断点列表读取失败", bpRefreshErr, "断点列表读取失败");
-  ownHint(wh, "观察点列表读取失败", wpRefreshErr, "观察点列表读取失败");
+  ownHint(bh, t("bp.listFail"), bpRefreshErr, t("bp.listFail"));
+  ownHint(wh, t("wp.listFail"), wpRefreshErr, t("wp.listFail"));
   renderBpTable(); renderWpTable();
 }
 // 自动检测到的多个候选 → 填进 datalist，路径框点开即可选另一个
@@ -586,7 +653,7 @@ function fillCandidateList(datalistId, cands) {
 // 地址类 TCL 命令的失败原因：一条数值地址之外的写法（符号名、表达式）会被 OpenOCD 拒绝
 function bpErrTip(token) {
   if (token && !/^0x[0-9a-f]+$/i.test(token))
-    return "（OpenOCD 的 bp/wp 只接受十六进制数值地址；符号名 main、表达式 0x…+4 都不会被解析，请先换算成地址）";
+    return t("x.err.shape");
   return "";
 }
 // OpenOCD 的 breakpoint_add/watchpoint_add 失败时只写自己的日志，不回 TCL；
@@ -603,16 +670,16 @@ async function bpCmd(cmd, refresh = true) {
   try {
     text = String(await tclExec(cmd, 15000) || "").trim();
   } catch (e) {
-    show("失败 " + cmd + " → " + e, false);
-    notify("命令失败: " + e, true);
+    show(t("x.cmd.fail", { cmd: cmd, e: e }), false);
+    notify(t("common.cmdFail", { e: e }), true);
     return;
   }
   const one = text.replace(/\s*\n\s*/g, " | ");
   if (refresh) await refreshBp();
   const rerr = isWp ? wpRefreshErr : bpRefreshErr;
   if (rerr) {   // 列表本身都没读到 → 不能拿旧条目数判成败
-    show("无法确认 " + cmd + "（列表读取失败：" + rerr + "，请点「刷新」重试）", false);
-    notify("列表读取失败，无法确认命令是否生效", true);
+    show(t("x.cmd.noConfirm", { cmd: cmd, err: rerr }), false);
+    notify(t("x.list.noConfirm"), true);
     return;
   }
   const after = isWp ? wpRows.length : bpRows.length;
@@ -624,52 +691,64 @@ async function bpCmd(cmd, refresh = true) {
   else if (addOp) ok = (after === before + 1);
   else if (delOne) ok = (after === before - 1);
   if (ok && /^(?:addr option value|error|Error|not halted)/i.test(text)) ok = false;
-  const cntTxt = "（当前 " + after + " 个）";
+  const cntTxt = t("x.cmd.count", { n: after });
   if (ok) {
-    show("已执行 " + cmd + (one ? " → " + one : " → ok") + cntTxt, true);
-    notify("已执行 " + cmd);
+    show(t("x.cmd.ok", { cmd: cmd, one: one || "ok" }) + cntTxt, true);
+    notify(t("x.cmd.executed", { cmd: cmd }));
   } else {
     const m = cmd.match(/^(?:r?wp|r?bp)\s+(\S+)/);
     let tip;
     const shapeTip = bpErrTip(m ? m[1] : "");
     if (shapeTip) tip = shapeTip;
-    else if (addOp) tip = "（列表条目数没变：" + before + " → " + after + "。OpenOCD 把这类失败只写进它自己的日志——「日志」页能看到；常见原因：地址没按长度对齐、目标没暂停（halt）、硬件断点/观察点资源不足、长度该目标不支持）";
-    else tip = "（列表条目数没变：" + before + " → " + after + "。用「刷新」看当前实际条目；若是 Context 断点（地址列显示 ctx 0x…），OpenOCD 的 rbp 只按地址删，没有按 asid 删的形式，请用「全部删除」(rbp all)）";
-    show("失败 " + cmd + (one ? " → " + one : "") + " " + tip + cntTxt, false);
-    notify("命令没有生效，详见页面上方的失败原因", true);
+    else if (addOp) tip = t("x.tip.addOp", { before: before, after: after });
+    else tip = t("x.tip.other", { before: before, after: after });
+    show(t("x.cmd.failPrefix", { cmd: cmd + (one ? " → " + one : "") }) + " " + tip + cntTxt, false);
+    notify(t("x.cmd.notifyFail"), true);
   }
 }
 
 // 断点/观察点地址与长度的硬约束：长度只能 1/2/4，且地址要按长度对齐
 function bpAlignTip(a, lenN) {
   if (!/^0x[0-9a-f]+$/i.test(a || "")) return "";
-  if (![1, 2, 4].includes(lenN)) return "长度只能是 1 / 2 / 4 字节（当前选了 " + lenN + "，OpenOCD 会拒绝）";
+  if (![1, 2, 4].includes(lenN)) return t("x.len.bad", { len: lenN });
   const n = parseInt(a, 16);
   if (n % lenN !== 0) {
     const fixed = (Math.floor(n / lenN) * lenN).toString(16);
-    return "地址没按长度对齐：长度为 " + lenN + " 时地址必须是 " + lenN + " 的整数倍，" + a + " 不是（可改成 0x" + fixed.padStart(a.length - 2, "0") + "）";
+    return t("x.align.bad", { len: lenN, addr: a, fixed: fixed.padStart(a.length - 2, "0") });
   }
   return "";
 }
 
 // ---------------------------------------------------------------- boot
+let booted = false;
 async function boot() {
+  if (booted) return;   // 幂等：重复调用（热重载 / 探针）不再叠加事件监听
+  booted = true;
+  document.addEventListener("i18n-applied", refreshDynamicLabels);
+  settings = await invoke("get_settings");
+  setLang((settings && settings.lang) ? settings.lang : FALLBACK_LANG);
+  applyI18n();
+  refreshDynamicLabels();
+  const langEl = $("about-lang"); if (langEl) langEl.textContent = langLabel(currentLang());
+  const langNote = $("about-lang-note"); if (langNote) langNote.textContent = t("about.langNote");
   buildTabs();
   buildQuick();
-  settings = await invoke("get_settings");
   settingsToForm();
   setServerState("stopped");
   rescanScripts();
 
   // backend events
   await listen("log", (e) => appendLog(e.payload));
+  // 后端只发键名，文案在 i18n 表里（如 hint.accessFail）
+  await listen("ocd-hint", (e) => appendLog(t(String(e.payload))));
   await listen("server-state", (e) => {
     setServerState(e.payload);
     if (e.payload === "failed") refreshBanksStub();
   });
   await listen("tcl-state", (e) => {
     const on = e.payload === true;
-    $("tcl-label").textContent = on ? "TCL: 已连接" : "TCL: 未连接";
+    tclOn = on;
+    $("tcl-label").textContent = on ? t("tb.tcl.on") : t("tb.tcl.off");
     $("tcl-label").style.color = on ? "#059669" : "#6b7280";
     setConnTabs(on);
     if (on) refreshTargetsOnce();
@@ -689,7 +768,7 @@ async function boot() {
   };
   $("cfg-autodetect").onclick = async () => {
     const cands = await invoke("detect_openocd");
-    if (!cands.length) { notify("未找到 openocd，请手动指定路径", true); return; }
+    if (!cands.length) { notify(t("ocd.notFound"), true); return; }
     fillCandidateList("cfg-exe-list", cands);
     if (cands.length > 1) { openocdPicker(cands); return; }
     applyOpenocd(cands[0]);
@@ -717,35 +796,35 @@ async function boot() {
     try {
       const f = await dialogSave({
         defaultPath: $("cfg-logfile").value.trim() || "openocd.log",
-        filters: [{ name: "日志文件 (*.log;*.txt)", extensions: ["log", "txt"] },
-                  { name: "所有文件 (*.*)", extensions: ["*"] }],
+        filters: [{ name: t("filter.log"), extensions: ["log", "txt"] },
+                  { name: t("filter.all"), extensions: ["*"] }],
       });
-      if (f) { $("cfg-logfile").value = f; notify("日志文件已设为 " + f); }
-    } catch (e) { notify("选择日志文件失败: " + e, true); }
+      if (f) { $("cfg-logfile").value = f; notify(t("cfg.logfile.set", { f: f })); }
+    } catch (e) { notify(t("cfg.logfile.pickFail", { e: e }), true); }
   };
-  $("cfg-logfile-clear").onclick = () => { $("cfg-logfile").value = ""; notify("日志文件已清空（日志只显示在「日志」页）"); };
+  $("cfg-logfile-clear").onclick = () => { $("cfg-logfile").value = ""; notify(t("cfg.logfile.cleared")); };
   $("profile-save").onclick = async () => {
     formToSettings();
-    const name = prompt("预设名称:");
+    const name = prompt(t("cfg.preset.prompt"));
     if (!name) return;
     try {
       const saved = await invoke("save_profile", { name, settings });
       await reloadProfiles(); $("profile-select").value = saved;
-      notify(`预设『${saved}』已保存`);
+      notify(t("cfg.preset.saved", { n: saved }));
     } catch (e) { notify(String(e), true); }
   };
   $("profile-load").onclick = async () => {
     const name = $("profile-select").value;
-    if (!name) { notify("请先选择一个预设", true); return; }
+    if (!name) { notify(t("cfg.preset.needPick"), true); return; }
     const p = await invoke("load_profile", { name });
-    if (!p) { notify(`预设『${name}』读取失败`, true); return; }
+    if (!p) { notify(t("cfg.preset.loadFail", { n: name }), true); return; }
     settings = Object.assign({}, settings, p);
     settingsToForm(); rescanScripts(); queryVersion();
-    notify(`已加载预设『${name}』`);
+    notify(t("cfg.preset.loaded", { n: name }));
   };
   $("profile-delete").onclick = async () => {
     const name = $("profile-select").value;
-    if (name && confirm(`确定删除预设『${name}』？`)) {
+    if (name && confirm(t("cfg.preset.confirmDel", { n: name }))) {
       await invoke("delete_profile", { name }); reloadProfiles();
     }
   };
@@ -755,7 +834,7 @@ async function boot() {
   $("log-filter").onchange = rerenderLog;
   $("log-clear").onclick = () => { logLines = []; rerenderLog(); };
   $("log-copy").onclick = () =>
-    navigator.clipboard.writeText(logLines.map(([, l]) => l).join("\n")).then(() => notify("日志已复制"));
+    navigator.clipboard.writeText(logLines.map(([, l]) => l).join("\n")).then(() => notify(t("log.copied")));
   $("console-send").onclick = () => { const v = $("console-input").value.trim();
     if (v) { $("console-input").value = ""; sendConsole(v); } };
   $("console-input").addEventListener("keydown", (ev) => {
@@ -784,7 +863,7 @@ async function boot() {
   $("reg-filter").oninput = renderRegs;
   regTimer = setInterval(() => {
     if ($("reg-auto").checked && lastTargetState === "halted" &&
-        $("tcl-label").textContent.includes("已连接") && !regPending) refreshRegs();
+        $("tcl-label").textContent.includes(t("tb.tcl.on")) && !regPending) refreshRegs();
   }, 1000);
 
   // memory
@@ -805,7 +884,7 @@ async function boot() {
   // breakpoints
   $("bp-add").onclick = () => {
     const a = addrToken($("bp-addr").value);
-    if (a === null) { notify("请填写断点地址：十六进制数值地址，如 0x08000100（0x 可省略）；符号名 main 之类 OpenOCD 不接受", true); return; }
+    if (a === null) { notify(t("bp.needAddr"), true); return; }
     const alignTip = bpAlignTip(a, parseInt($("bp-len").value, 10));
     if (alignTip) { notify(alignTip, true); return; }
     let cmd = `bp ${a} ${$("bp-len").value}`;
@@ -814,16 +893,16 @@ async function boot() {
   };
   $("bp-del").onclick = () => {
     const row = bpRows[bpSel];
-    if (!row) { notify("请先在表格中单击选中一行断点", true); return; }
-    if (!row.addr) { notify("该断点没有地址（Context 断点）：OpenOCD 的 rbp 只能按地址删除，没有按 asid 删除的形式，请用「全部删除」(rbp all)", true); return; }
+    if (!row) { notify(t("bp.delNone"), true); return; }
+    if (!row.addr) { notify(t("bp.delCtx"), true); return; }
     bpCmd(`rbp ${row.addr}`);
     bpSel = -1;
   };
-  $("bp-delall").onclick = () => { if (confirm("确定删除全部断点？")) bpCmd("rbp all"); };
+  $("bp-delall").onclick = () => { if (confirm(t("bp.confirmDelAll"))) bpCmd("rbp all"); };
   $("bp-refresh").onclick = refreshBp;
   $("wp-add").onclick = () => {
     const a = addrToken($("wp-addr").value);
-    if (a === null) { notify("请填写观察点地址：十六进制数值地址，如 0x20000000（0x 可省略）；符号名 OpenOCD 不接受", true); return; }
+    if (a === null) { notify(t("wp.needAddr"), true); return; }
     const alignTip = bpAlignTip(a, parseInt($("wp-len").value, 10));
     if (alignTip) { notify(alignTip, true); return; }
     const rw = ["r", "w", "a"][$("wp-access").selectedIndex];
@@ -831,12 +910,12 @@ async function boot() {
     const vRaw = $("wp-value").value.trim();
     if (vRaw) {
       const v = numToken(vRaw);
-      if (v === undefined) { notify("观察点「值」不是合法数字（十六进制，可省略 0x）", true); return; }
+      if (v === undefined) { notify(t("wp.badValue"), true); return; }
       cmd += " " + v;
       const mRaw = $("wp-mask").value.trim();
       if (mRaw) {
         const m = numToken(mRaw);
-        if (m === undefined) { notify("观察点「掩码」不是合法数字", true); return; }
+        if (m === undefined) { notify(t("wp.badMask"), true); return; }
         cmd += " " + m;
       }
     }
@@ -844,11 +923,11 @@ async function boot() {
   };
   $("wp-del").onclick = () => {
     const row = wpRows[wpSel];
-    if (!row) { notify("请先在表格中单击选中一行观察点", true); return; }
+    if (!row) { notify(t("wp.delNone"), true); return; }
     bpCmd(`rwp ${row.addr}`);
     wpSel = -1;
   };
-  $("wp-delall").onclick = () => { if (confirm("确定删除全部观察点？")) bpCmd("rwp all"); };
+  $("wp-delall").onclick = () => { if (confirm(t("wp.confirmDelAll"))) bpCmd("rwp all"); };
   $("wp-refresh").onclick = refreshBp;
 
   // gdb
@@ -860,31 +939,31 @@ async function boot() {
   };
   $("gdb-autodetect").onclick = async () => {
     let cands = [];
-    try { cands = await invoke("detect_gdb"); } catch (e) { notify("自动检测失败: " + e, true); return; }
-    if (!cands || !cands.length) { notify("未找到 GDB（arm-none-eabi-gdb / gdb-multiarch / gdb），请手动指定路径", true); return; }
+    try { cands = await invoke("detect_gdb"); } catch (e) { notify(t("gdb.detectFail", { e: e }), true); return; }
+    if (!cands || !cands.length) { notify(t("gdb.notFound"), true); return; }
     fillCandidateList("gdb-path-list", cands);
     if (cands.length > 1) {
-      showModal("选择 GDB（检测到 " + cands.length + " 个）",
-        cands.map((c, k2) => (k2 + 1) + ") " + c).join("\n") + "\n\n点下面的按钮选用其中一个；也可直接在路径框里输入或从下拉候选里选。",
+      showModal(t("gdb.pickTitle", { n: cands.length }),
+        cands.map((c, k2) => (k2 + 1) + ") " + c).join("\n") + "\n\n" + t("common.choice.pickAll"),
         cands.map((c) => ({ label: shortExe(c), onPick: () => applyGdb(c) })));
-      notify("检测到 " + cands.length + " 个 GDB，请在弹出的窗口里选择");
+      notify(t("gdb.multi", { n: cands.length }));
       return;
     }
     applyGdb(cands[0]);
   };
   $("gdb-version").onclick = async () => {
     const gexe = $("gdb-path").value.trim();
-    if (!gexe) { notify("请先填写 GDB 程序路径", true); return; }
+    if (!gexe) { notify(t("gdb.needPath"), true); return; }
     await showVersion(gexe, $("gdb-version-label"));
   };
   $("gdb-copy").onclick = () => {
     navigator.clipboard.writeText(`${$("gdb-path").value} ${$("gdb-args").value}`)
-      .then(() => notify("命令行已复制"));
+      .then(() => notify(t("gdb.copied")));
   };
   $("gdb-launch").onclick = async () => {
     try { await invoke("launch_gdb", { gdb: $("gdb-path").value, args: $("gdb-args").value });
-      notify("已启动 GDB"); }
-    catch (e) { notify("启动 GDB 失败: " + e, true); }
+      notify(t("gdb.launched")); }
+    catch (e) { notify(t("gdb.launchFail", { e: e }), true); }
   };
 
   // about 页
@@ -892,10 +971,10 @@ async function boot() {
   try { $("about-configdir").textContent = await invoke("config_dir_path"); } catch (e) {}
   $("about-detect").onclick = async () => {
     const exe = $("cfg-exe").value.trim();
-    if (!exe) { notify("请先在「配置」页指定 OpenOCD 路径", true); return; }
+    if (!exe) { notify(t("ocd.needPath"), true); return; }
     $("about-openocd-path").textContent = exe;
     const v = await showVersion(exe, $("about-openocd"), "");
-    if (!v) notify("OpenOCD 版本检测失败（检查路径是否存在）", true);
+    if (!v) notify(t("ocd.version.fail"), true);
   };
   $("about-open-configdir").onclick = async () => {
     try { await invoke("open_path", { path: $("about-configdir").textContent }); }
@@ -903,26 +982,26 @@ async function boot() {
   };
   document.querySelectorAll("#page-about .link").forEach(b => {
     b.onclick = async () => {
-      try { await invoke("open_url", { url: b.dataset.url }); notify("已在浏览器打开：" + b.dataset.url); }
-      catch (e) { notify("打开链接失败: " + e, true); }
+      try { await invoke("open_url", { url: b.dataset.url }); notify(t("common.opened", { u: b.dataset.url })); }
+      catch (e) { notify(t("common.openFail", { e: e }), true); }
     };
   });
   $("about-check-update").onclick = () => checkUpdate(false);
   $("about-open-release").onclick = async () => {
     const u = $("about-open-release").dataset.url;
-    if (!u) { notify("请先点「获取更新版本」", true); return; }
-    try { await invoke("open_url", { url: u }); notify("已在浏览器打开：" + u); }
-    catch (e) { notify("打开链接失败: " + e, true); }
+    if (!u) { notify(t("up.needCheck"), true); return; }
+    try { await invoke("open_url", { url: u }); notify(t("common.opened", { u: u })); }
+    catch (e) { notify(t("common.openFail", { e: e }), true); }
   };
   $("about-release-notes").onclick = () => {
-    if (!updateInfo || !updateInfo.notes) { notify("没有可显示的更新说明", true); return; }
-    showModal(updateInfo.tag + " 更新说明", updateInfo.notes);
+    if (!updateInfo || !updateInfo.notes) { notify(t("up.noNotes"), true); return; }
+    showModal(t("up.notesTitle", { tag: updateInfo.tag }), updateInfo.notes);
   };
 
   // 只读预览弹窗
   $("modal-close").onclick = hideModal;
   $("modal-copy").onclick = () => navigator.clipboard.writeText($("modal-body").textContent)
-    .then(() => notify("已复制到剪贴板"));
+    .then(() => notify(t("common.copied")));
   $("modal").onclick = (e) => { if (e.target === $("modal")) hideModal(); };
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideModal(); });
 
@@ -940,15 +1019,15 @@ async function boot() {
 function refreshBanksStub() {}
 async function queryVersion() {
   const exe = $("cfg-exe").value.trim();
-  if (!exe) { notify("请先指定 OpenOCD 路径", true); return; }
+  if (!exe) { notify(t("ocd.needPath"), true); return; }
   await showVersion(exe, $("cfg-version-label"));
 }
 // 把某个可执行文件 --version 的首行写进指定元素；返回版本串（检测失败为空串）
-async function showVersion(exe, el, prefix = "版本: ") {
-  el.textContent = prefix + "检测中…";
+async function showVersion(exe, el, prefix = t("common.version.prefix")) {
+  el.textContent = prefix + t("common.version.checking");
   let v = "";
   try { v = String((await invoke("query_version", { exe })) || "").split("\n")[0].trim(); } catch (e) { v = ""; }
-  el.textContent = prefix + (v || "未检测到（检查路径是否存在）");
+  el.textContent = prefix + (v || t("common.version.none"));
   return v;
 }
 
@@ -960,28 +1039,28 @@ async function checkUpdate(auto) {
   const st = $("about-update-status");
   const openBtn = $("about-open-release"), notesBtn = $("about-release-notes");
   st.style.color = "";
-  st.textContent = "检查中…";
+  st.textContent = t("up.checking");
   openBtn.style.display = "none";
   notesBtn.style.display = "none";
   try {
     const r = await invoke("check_update");
     updateInfo = r;
-    const via = r.source === "tags" ? "标签" : "Release";
-    const when = r.published_at ? "，发布于 " + String(r.published_at).slice(0, 10) : "";
+    const via = r.source === "tags" ? t("up.viaTag") : t("up.viaRelease");
+    const when = r.published_at ? t("up.published", { d: String(r.published_at).slice(0, 10) }) : "";
     if (r.has_update) {
-      st.textContent = `发现新版本 ${r.tag}（当前 v${r.current}，取自 ${via}${when}）`;
+      st.textContent = t("up.new", { tag: r.tag, cur: r.current, via: via, when: when });
       st.style.color = "#b45309";
-      notify(`发现新版本 ${r.tag}（当前 v${r.current}）`);
+      notify(t("up.newNotify", { tag: r.tag, cur: r.current }));
     } else {
-      st.textContent = `已是最新：v${r.current}（GitHub 上为 ${r.tag}，取自 ${via}${when}）`;
+      st.textContent = t("up.latest", { cur: r.current, tag: r.tag, via: via, when: when });
       st.style.color = "#15803d";
     }
     if (r.url) { openBtn.dataset.url = r.url; openBtn.style.display = ""; }
     if (r.notes && String(r.notes).trim()) notesBtn.style.display = "";
   } catch (e) {
-    st.textContent = "检查失败：" + e;
+    st.textContent = t("up.fail", { e: e });
     st.style.color = "#b91c1c";
-    if (!auto) notify("检查更新失败: " + e, true);
+    if (!auto) notify(t("up.failNotify", { e: e }), true);
   }
 }
 // ---------------------------------------------------------------- 只读预览弹窗
@@ -1017,17 +1096,17 @@ function stripTrailingSlash(s) {
 // 查看 cfg 内容：接口/目标两份 cfg 的只读全文（相对名按脚本目录解析）
 // 自动检测到多个 OpenOCD → 弹窗选择（也可以直接在路径框下拉里换）
 function openocdPicker(cands) {
-  showModal("选择 OpenOCD（检测到 " + cands.length + " 个）",
-    cands.map((c, k2) => (k2 + 1) + ") " + c).join("\n") + "\n\n点下面的按钮选用其中一个；也可直接在路径框里输入或从下拉候选里选。",
+  showModal(t("ocd.pickTitle", { n: cands.length }),
+    cands.map((c, k2) => (k2 + 1) + ") " + c).join("\n") + "\n\n" + t("common.choice.pickAll"),
     cands.map((c) => ({ label: shortExe(c), onPick: () => applyOpenocd(c) })));
-  notify("检测到 " + cands.length + " 个 OpenOCD，请在弹出的窗口里选择");
+  notify(t("ocd.multi", { n: cands.length }));
 }
 async function applyOpenocd(p) {
   $("cfg-exe").value = p;
   const g = await invoke("guess_scripts", { exe: p });
   if (g) { $("cfg-scripts").value = g; rescanScripts(); }
   queryVersion();
-  notify("已选择 " + p);
+  notify(t("common.selected", { p: p }));
 }
 // 只留最后两段路径，便于在按钮上辨认
 function shortExe(p) { return String(p).split(/[\\/]/).slice(-2).join("/"); }
@@ -1035,43 +1114,43 @@ function shortExe(p) { return String(p).split(/[\\/]/).slice(-2).join("/"); }
 function applyGdb(p) {
   $("gdb-path").value = p;
   updateGdbPreview();
-  notify("已选择 " + p);
+  notify(t("common.selected", { p: p }));
 }
 
 async function previewCfgOne(which) {
   const dir = stripTrailingSlash($("cfg-scripts").value.trim());
   const isIfc = which === "interface";
-  const label = isIfc ? "接口 cfg (-f)" : "目标/板级 cfg (-f)";
+  const label = isIfc ? t("prev.ifc") : t("prev.tgt");
   const v = (isIfc ? $("cfg-interface") : $("cfg-target")).value.trim();
-  if (!v) { notify("请先选择" + (isIfc ? "接口 cfg" : "目标/板级 cfg"), true); return; }
+  if (!v) { notify(t("prev.need", { which: label }), true); return; }
   const rel = !isAbsPath(v);
   const abs = rel ? (dir ? dir + "/" + v : v) : v;
   let body;
   try { body = await invoke("read_text_file", { path: abs }); }
-  catch (e) { body = "—— 读取失败：" + e; }
-  if (rel && !dir) body = "—— 提示：当前未设置脚本目录（-s），相对名无法解析为实际路径，请先在配置页设置脚本目录。\n" + body;
-  showModal(label + " 内容预览（只读）", "值: " + v + "\n解析路径: " + abs + "\n----- 内容 -----\n" + body);
+  catch (e) { body = t("prev.readFail", { e: e }); }
+  if (rel && !dir) body = t("prev.noScripts") + body;
+  showModal(t("prev.title", { label: label }), t("prev.body", { v: v, abs: abs, body: body }));
 }
 // ---------------------------------------------------------------- cfg 选择与文件过滤器
 const FIRMWARE_FILTERS = [
-  { name: "固件镜像 (*.bin;*.hex;*.elf;*.axf;*.out;*.mot;*.s19;*.icf)",
+  { name: t("filter.firmware"),
     extensions: ["bin", "hex", "elf", "axf", "out", "mot", "s19", "icf"] },
-  { name: "ELF (*.elf;*.axf;*.out)", extensions: ["elf", "axf", "out"] },
-  { name: "Intel HEX / Motorola S-Record (*.hex;*.mot;*.s19)", extensions: ["hex", "mot", "s19"] },
-  { name: "二进制 (*.bin)", extensions: ["bin"] },
-  { name: "所有文件 (*.*)", extensions: ["*"] },
+  { name: t("filter.elf"), extensions: ["elf", "axf", "out"] },
+  { name: t("filter.hexrec"), extensions: ["hex", "mot", "s19"] },
+  { name: t("filter.bin"), extensions: ["bin"] },
+  { name: t("filter.all"), extensions: ["*"] },
 ];
 const CFG_FILTERS = [
-  { name: "OpenOCD 脚本 (*.cfg)", extensions: ["cfg"] },
-  { name: "所有文件 (*.*)", extensions: ["*"] },
+  { name: t("filter.cfg"), extensions: ["cfg"] },
+  { name: t("filter.all"), extensions: ["*"] },
 ];
 const EXE_FILTERS = [
-  { name: "可执行文件 (*.exe)", extensions: ["exe"] },
-  { name: "所有文件 (*.*)", extensions: ["*"] },
+  { name: t("filter.exe"), extensions: ["exe"] },
+  { name: t("filter.all"), extensions: ["*"] },
 ];
 const GDB_FILTERS = [
-  { name: "GDB 可执行文件 (*.exe)", extensions: ["exe"] },
-  { name: "所有文件 (*.*)", extensions: ["*"] },
+  { name: t("filter.gdbexe"), extensions: ["exe"] },
+  { name: t("filter.all"), extensions: ["*"] },
 ];
 let scriptLists = { interface: [], target: [], board: [] };
 
@@ -1096,11 +1175,11 @@ function migrateLegacyConfigs() {
 
 function updateCfgPreview() {
   const parts = [];
-  const i = $("cfg-interface").value.trim(), t = $("cfg-target").value.trim();
+  const i = $("cfg-interface").value.trim(), tgt = $("cfg-target").value.trim();
   if (i) parts.push("-f " + i);
-  if (t) parts.push("-f " + t);
+  if (tgt) parts.push("-f " + tgt);
   $("cfg-order-preview").textContent =
-    parts.length ? "启动顺序: openocd … " + parts.join(" ") : "未选择 cfg（两者均可留空）";
+    parts.length ? t("cfg.order", { parts: parts.join(" ") }) : t("cfg.order.empty");
   updateCfgWarning();
 }
 // 手输的名字若不在脚本库扫描结果里，提示一下（仍按原样传给 OpenOCD，不拦截）
@@ -1109,14 +1188,14 @@ function updateCfgWarning() {
   if (!el) return;
   const known = { ifc: scriptLists.interface || [], tgt: (scriptLists.target || []).concat(scriptLists.board || []) };
   const bad = [];
-  const pairs = [["接口 cfg", $("cfg-interface").value.trim(), known.ifc],
-                 ["目标/板级 cfg", $("cfg-target").value.trim(), known.tgt]];
+  const pairs = [[t("cfg.pair.ifc"), $("cfg-interface").value.trim(), known.ifc],
+                 [t("cfg.pair.tgt"), $("cfg-target").value.trim(), known.tgt]];
   for (const x of pairs) {
     const label = x[0], v = x[1], list = x[2];
     if (!v || isAbsPath(v)) continue;
-    if (list.length && list.indexOf(v) < 0) bad.push(label + "『" + v + "』不在脚本库列表中");
+    if (list.length && list.indexOf(v) < 0) bad.push(t("cfg.warn.notInList", { label: label, v: v }));
   }
-  el.textContent = bad.length ? (bad.join("；") + "（仍会按原样传给 OpenOCD，请自行确认拼写）") : "";
+  el.textContent = bad.length ? (bad.join("；") + t("cfg.warn.tail")) : "";
   el.style.color = "#b45309";
 }
 
@@ -1144,10 +1223,10 @@ function fillCfgSelects() {
 
 async function rescanScripts() {
   const dir = $("cfg-scripts").value.trim();
-  if (!dir) { $("cfg-scan-label").textContent = "未扫描"; return; }
+  if (!dir) { $("cfg-scan-label").textContent = t("cfg.scan.none"); return; }
   try {
     scriptLists = await invoke("scan_scripts", { dir });
-  } catch (e) { $("cfg-scan-label").textContent = "扫描失败: " + e; return; }
+  } catch (e) { $("cfg-scan-label").textContent = t("cfg.scan.failed", { e: e }); return; }
   $("cfg-scan-label").textContent =
     `interface ${(scriptLists.interface || []).length} · target ${(scriptLists.target || []).length} · board ${(scriptLists.board || []).length}`;
   fillCfgSelects();
