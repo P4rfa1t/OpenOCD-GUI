@@ -792,13 +792,14 @@ async function boot() {
   booted = true;
   document.addEventListener("i18n-applied", refreshDynamicLabels);
   settings = await invoke("get_settings");
-  // 设置文件解析失败时后端会保留原文件并回落默认值，这里必须让用户看见
+  setLang((settings && settings.lang) ? settings.lang : LANG_AUTO);
+  applyI18n();
+  // 设置文件解析失败时后端会保留原文件并回落默认值，这里必须让用户看见。
+  // 必须放在 setLang/applyI18n 之后：否则提示文案取的是脚本加载期的默认语言。
   try {
     const le = await invoke("settings_load_error");
     if (le) { appendLog("Warn : " + le); showModal(t("common.errorTitle"), t("common.settingsBad") + "\n\n" + le); }
   } catch {}
-  setLang((settings && settings.lang) ? settings.lang : LANG_AUTO);
-  applyI18n();
   refreshDynamicLabels();
   fillLangSelect();
   buildTabs();
