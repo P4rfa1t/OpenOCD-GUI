@@ -306,7 +306,7 @@ function fillLangSelect() {
 function updateLangNote() {
   const el = $("about-lang-note");
   if (!el) return;
-  el.textContent = t("about.langNow", { label: langLabel(currentLang()) }) + " " + t("about.langNote");
+  el.textContent = t("about.langNote", { label: langLabel(currentLang()) });
 }
 async function startServer() {
   formToSettings();
