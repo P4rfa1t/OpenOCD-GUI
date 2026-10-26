@@ -155,23 +155,33 @@ function fillTable(tbodyId, rows, cols, onDbl) {
 }
 
 // ---------------------------------------------------------------- tabs
+// 第二列存「键名」而不是译文：模块级 const 在解析期求值，那时 setLang 还没跑，
+// 存译文会把标签栏永久钉死在加载期语言上。
 const TABS = [
-  ["config", t("tab.config"), false], ["log", t("tab.log"), false], ["console", t("tab.console"), true],
-  ["target", t("tab.target"), true], ["regs", t("tab.regs"), true], ["mem", t("tab.mem"), true],
-  ["flash", t("tab.flash"), true], ["bp", t("tab.bp"), true], ["gdb", t("tab.gdb"), false],
-  ["about", t("tab.about"), false],
+  ["config", "tab.config", false], ["log", "tab.log", false], ["console", "tab.console", true],
+  ["target", "tab.target", true], ["regs", "tab.regs", true], ["mem", "tab.mem", true],
+  ["flash", "tab.flash", true], ["bp", "tab.bp", true], ["gdb", "tab.gdb", false],
+  ["about", "tab.about", false],
 ];
 function buildTabs() {
   const box = $("tabs");
-  TABS.forEach(([id, title, needConn]) => {
+  TABS.forEach(([id, key, needConn]) => {
     const el = document.createElement("div");
-    el.textContent = title;
+    el.textContent = t(key);
     el.dataset.page = id;
+    el.dataset.i18nTab = key;
     el.dataset.needConn = needConn ? "1" : "";
     el.onclick = () => selectTab(id);
     box.appendChild(el);
   });
   selectTab("config");
+}
+// 切语言时就地改标签文字（不重建标签栏：buildTabs 末尾会 selectTab("config")，会把当前页跳走）
+function refreshTabLabels() {
+  document.querySelectorAll("#tabs div").forEach(el => {
+    const key = el.dataset.i18nTab;
+    if (key) el.textContent = t(key);
+  });
 }
 function selectTab(id) {
   document.querySelectorAll("#tabs div").forEach(el =>
@@ -277,10 +287,13 @@ function refreshDynamicLabels() {
   updateGdbPreview();
   if (lastTargetState) $("target-label").textContent = t("tb.target", { v: lastTargetState });
   dynRefresh();
-  // 表格的表头/占位/计数都是 JS 渲染的，切语言时按现有数据重画
+  refreshTabLabels();
+  refreshLangSelect();
+  // 表格的表头/占位/计数都是 JS 渲染的，切语言时按现有数据重画。
+  // 内存表连表头都是 renderMem 生成的，所以「画过一次」也要重画（空数据时也不能把表头留成旧语言）。
   renderBpTable(); renderWpTable();
   if (regRows.length) renderRegs();
-  if (memRows.length) renderMem();
+  if (memRows.length || $("mem-table").querySelector("thead")) renderMem();
 }
 
 // 关于页语言下拉：第一项「自动（跟随系统语言）」，其余来自 i18n 的 LANGS
@@ -300,6 +313,18 @@ function fillLangSelect() {
   }
   sel.value = currentLangPref();
   sel.onchange = () => { setLang(sel.value); };
+}
+
+// 语言下拉里「自动」这一项的文字也要跟着语言走；只改已存在的 option，不重建（重建会丢选中）
+function refreshLangSelect() {
+  const sel = $("about-lang");
+  if (!sel) return;
+  const auto = sel.querySelector('option[value="' + LANG_AUTO + '"]');
+  if (auto) auto.textContent = t("about.langAuto");
+  for (const l of langList()) {
+    const o = sel.querySelector('option[value="' + l.code + '"]');
+    if (o) o.textContent = l.label;
+  }
 }
 
 // 「当前显示：<语言>」+ 说明；语言变化后由 refreshDynamicLabels（i18n-applied）重刷
@@ -767,6 +792,11 @@ async function boot() {
   booted = true;
   document.addEventListener("i18n-applied", refreshDynamicLabels);
   settings = await invoke("get_settings");
+  // 设置文件解析失败时后端会保留原文件并回落默认值，这里必须让用户看见
+  try {
+    const le = await invoke("settings_load_error");
+    if (le) { appendLog("Warn : " + le); showModal(t("common.errorTitle"), t("common.settingsBad") + "\n\n" + le); }
+  } catch {}
   setLang((settings && settings.lang) ? settings.lang : LANG_AUTO);
   applyI18n();
   refreshDynamicLabels();
@@ -799,7 +829,7 @@ async function boot() {
   $("btn-start").onclick = startServer;
   $("btn-stop").onclick = stopServer;
   $("cfg-exe-browse").onclick = async () => {
-    const f = await dialogOpen({ multiple: false, filters: EXE_FILTERS });
+    const f = await dialogOpen({ multiple: false, filters: EXE_FILTERS() });
     if (f) $("cfg-exe").value = f;
   };
   $("cfg-scripts-browse").onclick = async () => {
@@ -817,13 +847,13 @@ async function boot() {
   $("cfg-rescan").onclick = rescanScripts;
   $("cfg-interface").oninput = $("cfg-target").oninput = updateCfgPreview;
   $("cfg-interface-browse").onclick = async () => {
-    const f = await dialogOpen({ multiple: false, filters: CFG_FILTERS });
+    const f = await dialogOpen({ multiple: false, filters: CFG_FILTERS() });
     if (!f) return;
     $("cfg-interface").value = f;
     updateCfgPreview();
   };
   $("cfg-target-browse").onclick = async () => {
-    const f = await dialogOpen({ multiple: false, filters: CFG_FILTERS });
+    const f = await dialogOpen({ multiple: false, filters: CFG_FILTERS() });
     if (!f) return;
     $("cfg-target").value = f;
     updateCfgPreview();
@@ -895,7 +925,9 @@ async function boot() {
   $("tg-resume").onclick = () => targetAction("resume");
   $("tg-srst").onclick = () => targetAction("soft_reset_halt");
   $("tg-reset").onclick = () => targetAction("reset " + $("tg-reset-mode").value);
-  $("tg-auto").onchange = () => { formToSettings(); invoke("save_settings", { settings });
+  $("tg-auto").onchange = () => { formToSettings();
+    // 保存失败（例如设置文件被占用导致改名失败）必须让用户看见，不能无声无息
+    invoke("save_settings", { settings }).catch((e) => notify(String(e), true));
     invoke("set_poll_enabled", { enabled: $("tg-auto").checked }); };
 
   // registers
@@ -913,7 +945,7 @@ async function boot() {
 
   // flash
   $("fl-browse").onclick = async () => {
-    const f = await dialogOpen({ multiple: false, filters: FIRMWARE_FILTERS });
+    const f = await dialogOpen({ multiple: false, filters: FIRMWARE_FILTERS() });
     if (f) $("fl-file").value = f;
   };
   $("fl-program").onclick = programFirmware;
@@ -973,7 +1005,7 @@ async function boot() {
   // gdb
   $("gdb-path").oninput = $("gdb-args").oninput = updateGdbPreview;
   $("gdb-browse").onclick = async () => {
-    const f = await dialogOpen({ multiple: false, filters: GDB_FILTERS });
+    const f = await dialogOpen({ multiple: false, filters: GDB_FILTERS() });
     if (!f) return;
     $("gdb-path").value = f; updateGdbPreview();
   };
@@ -1184,26 +1216,36 @@ async function previewCfgOne(which) {
   showModal(t("prev.title", { label: label }), t("prev.body", { v: v, abs: abs, body: body }));
 }
 // ---------------------------------------------------------------- cfg 选择与文件过滤器
-const FIRMWARE_FILTERS = [
-  { name: t("filter.firmware"),
-    extensions: ["bin", "hex", "elf", "axf", "out", "mot", "s19", "icf"] },
-  { name: t("filter.elf"), extensions: ["elf", "axf", "out"] },
-  { name: t("filter.hexrec"), extensions: ["hex", "mot", "s19"] },
-  { name: t("filter.bin"), extensions: ["bin"] },
-  { name: t("filter.all"), extensions: ["*"] },
-];
-const CFG_FILTERS = [
-  { name: t("filter.cfg"), extensions: ["cfg"] },
-  { name: t("filter.all"), extensions: ["*"] },
-];
-const EXE_FILTERS = [
-  { name: t("filter.exe"), extensions: ["exe"] },
-  { name: t("filter.all"), extensions: ["*"] },
-];
-const GDB_FILTERS = [
-  { name: t("filter.gdbexe"), extensions: ["exe"] },
-  { name: t("filter.all"), extensions: ["*"] },
-];
+// 这些过滤器的 name 要按「打开对话框那一刻」的语言现算：写成模块级常量会在解析期
+// 求值（那时 setLang 还没跑），原生文件对话框的「文件类型」下拉就会钉死在启动语言上。
+function FIRMWARE_FILTERS() {
+  return [
+    { name: t("filter.firmware"),
+      extensions: ["bin", "hex", "elf", "axf", "out", "mot", "s19", "icf"] },
+    { name: t("filter.elf"), extensions: ["elf", "axf", "out"] },
+    { name: t("filter.hexrec"), extensions: ["hex", "mot", "s19"] },
+    { name: t("filter.bin"), extensions: ["bin"] },
+    { name: t("filter.all"), extensions: ["*"] },
+  ];
+}
+function CFG_FILTERS() {
+  return [
+    { name: t("filter.cfg"), extensions: ["cfg"] },
+    { name: t("filter.all"), extensions: ["*"] },
+  ];
+}
+function EXE_FILTERS() {
+  return [
+    { name: t("filter.exe"), extensions: ["exe"] },
+    { name: t("filter.all"), extensions: ["*"] },
+  ];
+}
+function GDB_FILTERS() {
+  return [
+    { name: t("filter.gdbexe"), extensions: ["exe"] },
+    { name: t("filter.all"), extensions: ["*"] },
+  ];
+}
 let scriptLists = { interface: [], target: [], board: [] };
 let lastScan = null;   // 上次 scan_scripts 的结果：null / { kind: "count", i, t, b } / { kind: "failed", e }
                        // 存数据而不是成品字符串，切换语言时才能用另一种语言重新渲染

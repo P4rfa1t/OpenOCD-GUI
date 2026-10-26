@@ -113,6 +113,7 @@ struct AppState {
     server_running: AtomicBool,
     stopping: AtomicBool,
     epoch: AtomicU64,
+    settings_load_error: Mutex<Option<String>>,
 }
 
 // ---------------------------------------------------------------- tcl rpc
@@ -376,20 +377,64 @@ fn get_settings(state: State<'_, AppState>) -> Settings {
     state.settings.lock().unwrap().clone()
 }
 
+/// 启动时读取设置文件失败的说明（解析失败会保留原文件并回落默认值）
+#[tauri::command]
+fn settings_load_error(state: State<'_, AppState>) -> Option<String> {
+    state.settings_load_error.lock().unwrap().clone()
+}
+
 #[tauri::command]
 fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
     std::fs::create_dir_all(config_dir()).map_err(|e| e.to_string())?;
     let json = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    std::fs::write(settings_path(), json).map_err(|e| e.to_string())?;
+    // 先写临时文件再原子替换：避免写一半被中断，留下一份截断 JSON
+    // （截断的 JSON 下次启动会解析失败，进而把用户整份设置抹成默认值）。
+    let path = settings_path();
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
     *state.settings.lock().unwrap() = settings;
     Ok(())
 }
 
-fn load_settings_or_default() -> Settings {
-    std::fs::read_to_string(settings_path())
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_else(Settings::with_defaults)
+/// 读取设置，并区分「文件不存在」与「读到了但解析失败」。
+/// 解析失败（含单个字段类型不符 —— serde 的 #[serde(default)] 只管字段缺失，
+/// 管不了字段存在但类型错）以前是静默吞掉并回落默认值，随后被 save_settings
+/// 覆盖写回，等于把用户整份配置抹掉；现在改成先备份原文件、再回落默认值，
+/// 并把原因通过 settings_load_error 告诉前端。
+fn load_settings_with_error() -> (Settings, Option<String>) {
+    let path = settings_path();
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (Settings::with_defaults(), None),
+        Err(e) => {
+            let msg = format!("读取设置文件失败（{}）：{}；本次使用默认设置。", path.display(), e);
+            dbglog(&msg);
+            return (Settings::with_defaults(), Some(msg));
+        }
+    };
+    match serde_json::from_str::<Settings>(&text) {
+        Ok(s) => (s, None),
+        Err(e) => {
+            // 备份名固定，就只在不存在时用；否则第二次损坏会把上一次的备份覆盖掉
+            let mut bad = path.with_extension("json.bad");
+            if bad.exists() {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                bad = path.with_extension(format!("json.bad-{}", ts));
+            }
+            let kept = std::fs::rename(&path, &bad).is_ok();
+            let msg = if kept {
+                format!("设置文件解析失败（{}）：{}；原文件已保留为 {}，本次使用默认设置。", path.display(), e, bad.display())
+            } else {
+                format!("设置文件解析失败（{}）：{}；本次使用默认设置（原文件保留失败）。", path.display(), e)
+            };
+            dbglog(&msg);
+            (Settings::with_defaults(), Some(msg))
+        }
+    }
 }
 
 #[tauri::command]
@@ -1292,7 +1337,7 @@ fn main() {
         }
         return;
     }
-    let settings = load_settings_or_default();
+    let (settings, load_error) = load_settings_with_error();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -1305,11 +1350,13 @@ fn main() {
                 server_running: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
             epoch: AtomicU64::new(0),
+            settings_load_error: Mutex::new(load_error.clone()),
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_settings,
+            settings_load_error,
             is_autostart,
             log_msg,
             save_settings,
